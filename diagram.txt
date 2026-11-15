@@ -1,0 +1,11 @@
+https://github.com/helwan-linux/hel-recorder
+📁 hel-recorder/
+├── 📁 assets
+│   └── 📄 icon.png
+├── 📄 features.go
+├── 📄 go.mod
+├── 📄 go.sum
+├── 📄 hel-recorder.desktop
+├── 📄 main.go
+├── 📄 recorder.go
+└── 📄 ui.go
