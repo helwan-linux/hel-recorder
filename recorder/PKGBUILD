@@ -1,23 +1,32 @@
+
 pkgname=hsr
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Helwan Screen Recorder - X11 Screen and Audio Recorder"
 arch=('x86_64')
-url=''
+url="https://github.com/helwan-linux/hel-recorder"
+license=('MIT')
+
 depends=(
     'ffmpeg'
     'gtk3'
     'libpulse'
     'xzoom'
 )
+
 makedepends=(
     'go'
+    'git'
 )
-source=()
-sha256sums=()
+
+source=(
+    "$pkgname::git+https://github.com/helwan-linux/hel-recorder.git#branch=main"
+)
+
+sha256sums=('SKIP')
 
 prepare() {
-    cd "$startdir"
+    cd "$srcdir/$pkgname"
 
     if [[ ! -f go.mod ]]; then
         error "go.mod was not found in the project root."
@@ -28,7 +37,7 @@ prepare() {
 }
 
 build() {
-    cd "$startdir"
+    cd "$srcdir/$pkgname"
 
     export CGO_ENABLED=1
 
@@ -36,13 +45,20 @@ build() {
         -mod=readonly \
         -trimpath \
         -buildvcs=false \
-        -o "$srcdir/hel-recorder" \
+        -o hel-recorder \
         .
 }
 
+check() {
+    cd "$srcdir/$pkgname"
+    go test -mod=readonly ./...
+}
+
 package() {
+    cd "$srcdir/$pkgname"
+
     install -Dm755 \
-        "$srcdir/hel-recorder" \
+        hel-recorder \
         "$pkgdir/usr/bin/hel-recorder"
 
     install -Dm644 \
