@@ -1,0 +1,62 @@
+pkgname=hsr
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Helwan Screen Recorder - X11 Screen and Audio Recorder"
+arch=('x86_64')
+url=''
+depends=(
+    'ffmpeg'
+    'gtk3'
+    'libpulse'
+    'xzoom'
+)
+makedepends=(
+    'go'
+)
+source=()
+sha256sums=()
+
+prepare() {
+    cd "$startdir"
+
+    if [[ ! -f go.mod ]]; then
+        error "go.mod was not found in the project root."
+        return 1
+    fi
+
+    go mod download
+}
+
+build() {
+    cd "$startdir"
+
+    export CGO_ENABLED=1
+
+    go build \
+        -mod=readonly \
+        -trimpath \
+        -buildvcs=false \
+        -o "$srcdir/hel-recorder" \
+        .
+}
+
+package() {
+    install -Dm755 \
+        "$srcdir/hel-recorder" \
+        "$pkgdir/usr/bin/hel-recorder"
+
+    install -Dm644 \
+        /dev/stdin \
+        "$pkgdir/usr/share/applications/helwan-screen-recorder.desktop" <<'EOF'
+[Desktop Entry]
+Name=Helwan Screen Recorder
+GenericName=Screen Recorder
+Comment=Record Screen and Audio
+Exec=hel-recorder
+Icon=video-record
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Recorder;
+StartupNotify=true
+EOF
+}

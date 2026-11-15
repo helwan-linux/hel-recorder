@@ -1,0 +1,5 @@
+cd ~/Desktop/hel-recorder
+go mod tidy
+gofmt -w main.go ui.go recorder.go
+go build -o hel-recorder .
+./hel-recorder

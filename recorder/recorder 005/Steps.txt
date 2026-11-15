@@ -1,0 +1,13 @@
+
+# 1. تثبيت الحزم المطلوبة (GTK3 و FFmpeg و Go)
+sudo pacman -Syu --needed go gtk3 ffmpeg
+
+# 2. الانتقال إلى مجلد المشروع وتهيئة الـ module (إذا لم تقم بذلك مسبقاً)
+go mod init hel-recorder
+go mod tidy
+
+# 3. بناء البرنامج
+go build -o hel-recorder main.go ui.go recorder.go
+
+# 4. تشغيل البرنامج
+./hel-recorder

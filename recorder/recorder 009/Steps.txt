@@ -1,0 +1,11 @@
+sudo pacman -S --needed go gtk3 ffmpeg xzoom
+
+cd ~/Desktop/hel-recorder
+
+gofmt -w main.go ui.go recorder.go features.go
+
+go mod tidy
+
+go build -o hel-recorder .
+
+./hel-recorder

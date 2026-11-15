@@ -1,0 +1,5 @@
+gofmt -w main.go recorder.go ui.go
+
+go build -o hel-recorder .
+
+./hel-recorder
