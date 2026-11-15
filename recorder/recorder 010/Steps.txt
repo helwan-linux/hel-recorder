@@ -1,7 +1,0 @@
-cd ~/Desktop/hel-recorder
-
-gofmt -w recorder.go ui.go features.go main.go
-
-go build -o hel-recorder .
-
-./hel-recorder

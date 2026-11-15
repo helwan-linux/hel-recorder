@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=Helwan Screen Recorder
-Comment=Professional high-performance screen and audio recorder for Arch Linux
-Exec=/usr/local/bin/hel-recorder
-Icon=video-record
-Terminal=false
-Type=Application
-Categories=AudioVideo;Recorder;
