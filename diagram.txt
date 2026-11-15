@@ -8,4 +8,5 @@ https://github.com/helwan-linux/hel-recorder
 ├── 📄 hel-recorder.desktop
 ├── 📄 main.go
 ├── 📄 recorder.go
-└── 📄 ui.go
+├── 📄 ui.go
+└── 📄 x11_hotkeys.go
