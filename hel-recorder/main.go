@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -12,7 +13,10 @@ func main() {
 	ui, win := InitUI()
 	manager := NewRecorderManager(ui)
 
-	SetupKeybindings(win, manager)
+	hotkeys, err := StartGlobalHotkeys(manager)
+	if err != nil {
+		ui.LblStatus.SetText("Status: Global shortcuts unavailable: " + err.Error())
+	}
 
 	closing := false
 
@@ -31,6 +35,10 @@ func main() {
 
 		go func() {
 			manager.WaitForStop()
+
+			if hotkeys != nil {
+				hotkeys.Stop()
+			}
 
 			glib.IdleAdd(func() {
 				win.Destroy()

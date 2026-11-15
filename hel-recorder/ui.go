@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -328,31 +327,4 @@ func showAboutDialog(parent *gtk.Window) {
 
 	dialog.Run()
 	dialog.Destroy()
-}
-
-func SetupKeybindings(win *gtk.Window, manager *RecorderManager) {
-	win.Connect("key-press-event", func(
-		_ *gtk.Window,
-		event *gdk.Event,
-	) bool {
-		keyEvent := gdk.EventKeyNewFromEvent(event)
-		keyval := keyEvent.KeyVal()
-		state := keyEvent.State()
-
-		if state&uint(gdk.CONTROL_MASK) != 0 {
-			switch keyval {
-			case gdk.KEY_r, gdk.KEY_R:
-				manager.ToggleRecordPause()
-				return true
-			case gdk.KEY_s, gdk.KEY_S:
-				manager.StopRecording()
-				return true
-			case gdk.KEY_g, gdk.KEY_G:
-				manager.ToggleMagnifier()
-				return true
-			}
-		}
-
-		return false
-	})
 }
