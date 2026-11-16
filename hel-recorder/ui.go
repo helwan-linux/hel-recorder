@@ -9,22 +9,22 @@ import (
 )
 
 type AppUI struct {
-	Window           *gtk.Window
-	BtnStart         *gtk.Button
-	BtnPause         *gtk.Button
-	BtnStop          *gtk.Button
-	LblTimer         *gtk.Label
-	LblStatus        *gtk.Label
-	ChkAudio         *gtk.CheckButton
-	ComboMic         *gtk.ComboBoxText
-	ChkSystemAudio   *gtk.CheckButton
-	ComboSystemAudio *gtk.ComboBoxText
-	ComboFPS         *gtk.ComboBoxText
-	ComboRes         *gtk.ComboBoxText
-	ComboCountdown   *gtk.ComboBoxText
-	FileChooser      *gtk.FileChooserButton
-	BtnHelp          *gtk.Button
-	BtnAbout         *gtk.Button
+	Window             *gtk.Window
+	BtnStart           *gtk.Button
+	BtnPause           *gtk.Button
+	BtnStop            *gtk.Button
+	LblTimer           *gtk.Label
+	LblStatus          *gtk.Label
+	ChkAudio           *gtk.CheckButton
+	ComboMic           *gtk.ComboBoxText
+	ChkSystemAudio     *gtk.CheckButton
+	ComboSystemAudio   *gtk.ComboBoxText
+	ComboFPS           *gtk.ComboBoxText
+	ComboRes           *gtk.ComboBoxText
+	ComboCountdown     *gtk.ComboBoxText
+	FileChooser        *gtk.FileChooserButton
+	BtnHelp            *gtk.Button
+	BtnAbout           *gtk.Button
 }
 
 func setRecorderIcon(win *gtk.Window) {
@@ -215,7 +215,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	btnStart, _ := gtk.ButtonNewWithLabel("Start (Ctrl+R)")
 	btnPause, _ := gtk.ButtonNewWithLabel("Pause (Ctrl+E)")
-	btnStop, _ := gtk.ButtonNewWithLabel("Stop (Ctrl+S)")
+	btnStop, _ := gtk.ButtonNewWithLabel("Stop (Ctrl+Q)")
 
 	btnPause.SetSensitive(false)
 	btnStop.SetSensitive(false)
@@ -308,7 +308,7 @@ func showHelpDialog(parent *gtk.Window) {
 		"Keyboard Shortcuts:\n\n"+
 			"Ctrl + R: Start recording\n"+
 			"Ctrl + E: Pause / Resume recording\n"+
-			"Ctrl + S: Stop and save\n"+
+			"Ctrl + Q: Stop and save\n"+
 			"Ctrl + G: Toggle Magnifier\n\n"+
 			"Select a countdown delay before recording.\n"+
 			"Microphone and system audio can be recorded independently.\n"+
@@ -328,7 +328,7 @@ func showAboutDialog(parent *gtk.Window) {
 
 	dialog.SetTransientFor(parent)
 	dialog.SetProgramName("Helwan Screen Recorder")
-	dialog.SetVersion("1.1.0")
+	dialog.SetVersion("1.0.0")
 	dialog.SetComments("Screen and audio recorder for Helwan Linux.")
 	dialog.SetWebsite("https://github.com/helwan-linux")
 

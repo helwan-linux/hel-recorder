@@ -11,140 +11,140 @@ package main
 static int hsr_grab_error = 0;
 
 static int hsr_x_error_handler(Display *display, XErrorEvent *event) {
-	if (event->error_code == BadAccess) {
-		hsr_grab_error = 1;
-	}
-	return 0;
+    if (event->error_code == BadAccess) {
+        hsr_grab_error = 1;
+    }
+    return 0;
 }
 
 static Display* hsr_open_and_grab(void) {
-	Display *display = XOpenDisplay(NULL);
-	if (display == NULL) {
-		return NULL;
-	}
+    Display *display = XOpenDisplay(NULL);
+    if (display == NULL) {
+        return NULL;
+    }
 
-	Window root = DefaultRootWindow(display);
+    Window root = DefaultRootWindow(display);
 
-	KeyCode keys[4];
-	keys[0] = XKeysymToKeycode(display, XK_r);
-	keys[1] = XKeysymToKeycode(display, XK_e);
-	keys[2] = XKeysymToKeycode(display, XK_s);
-	keys[3] = XKeysymToKeycode(display, XK_g);
+    KeyCode keys[4];
+    keys[0] = XKeysymToKeycode(display, XK_r);
+    keys[1] = XKeysymToKeycode(display, XK_e);
+    keys[2] = XKeysymToKeycode(display, XK_q); // تم التعديل من XK_s إلى XK_q
+    keys[3] = XKeysymToKeycode(display, XK_g);
 
-	for (int i = 0; i < 4; i++) {
-		if (keys[i] == 0) {
-			XCloseDisplay(display);
-			return NULL;
-		}
-	}
+    for (int i = 0; i < 4; i++) {
+        if (keys[i] == 0) {
+            XCloseDisplay(display);
+            return NULL;
+        }
+    }
 
-	unsigned int modifiers[] = {
-		ControlMask,
-		ControlMask | LockMask,
-		ControlMask | Mod2Mask,
-		ControlMask | LockMask | Mod2Mask
-	};
+    unsigned int modifiers[] = {
+        ControlMask,
+        ControlMask | LockMask,
+        ControlMask | Mod2Mask,
+        ControlMask | LockMask | Mod2Mask
+    };
 
-	hsr_grab_error = 0;
+    hsr_grab_error = 0;
 
-	int (*old_handler)(Display *, XErrorEvent *);
-	old_handler = XSetErrorHandler(hsr_x_error_handler);
+    int (*old_handler)(Display *, XErrorEvent *);
+    old_handler = XSetErrorHandler(hsr_x_error_handler);
 
-	for (int i = 0; i < 4; i++) {
-		for (int j = 0; j < 4; j++) {
-			XGrabKey(
-				display,
-				keys[i],
-				modifiers[j],
-				root,
-				False,
-				GrabModeAsync,
-				GrabModeAsync
-			);
-		}
-	}
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            XGrabKey(
+                display,
+                keys[i],
+                modifiers[j],
+                root,
+                False,
+                GrabModeAsync,
+                GrabModeAsync
+            );
+        }
+    }
 
-	XSync(display, False);
-	XSetErrorHandler(old_handler);
+    XSync(display, False);
+    XSetErrorHandler(old_handler);
 
-	if (hsr_grab_error) {
-		for (int i = 0; i < 4; i++) {
-			for (int j = 0; j < 4; j++) {
-				XUngrabKey(display, keys[i], modifiers[j], root);
-			}
-		}
-		XSync(display, False);
-		XCloseDisplay(display);
-		return NULL;
-	}
+    if (hsr_grab_error) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                XUngrabKey(display, keys[i], modifiers[j], root);
+            }
+        }
+        XSync(display, False);
+        XCloseDisplay(display);
+        return NULL;
+    }
 
-	return display;
+    return display;
 }
 
 static int hsr_poll_hotkey(Display *display) {
-	if (display == NULL || XPending(display) == 0) {
-		return 0;
-	}
+    if (display == NULL || XPending(display) == 0) {
+        return 0;
+    }
 
-	XEvent event;
-	XNextEvent(display, &event);
+    XEvent event;
+    XNextEvent(display, &event);
 
-	if (event.type != KeyPress) {
-		return 0;
-	}
+    if (event.type != KeyPress) {
+        return 0;
+    }
 
-	if (!(event.xkey.state & ControlMask)) {
-		return 0;
-	}
+    if (!(event.xkey.state & ControlMask)) {
+        return 0;
+    }
 
-	KeySym key = XLookupKeysym(&event.xkey, 0);
+    KeySym key = XLookupKeysym(&event.xkey, 0);
 
-	switch (key) {
-		case XK_r:
-		case XK_R:
-			return 1;
-		case XK_e:
-		case XK_E:
-			return 2;
-		case XK_s:
-		case XK_S:
-			return 3;
-		case XK_g:
-		case XK_G:
-			return 4;
-	}
+    switch (key) {
+        case XK_r:
+        case XK_R:
+            return 1;
+        case XK_e:
+        case XK_E:
+            return 2;
+        case XK_q: // تم التعديل من XK_s إلى XK_q
+        case XK_Q:
+            return 3;
+        case XK_g:
+        case XK_G:
+            return 4;
+    }
 
-	return 0;
+    return 0;
 }
 
 static void hsr_close_hotkeys(Display *display) {
-	if (display == NULL) {
-		return;
-	}
+    if (display == NULL) {
+        return;
+    }
 
-	Window root = DefaultRootWindow(display);
+    Window root = DefaultRootWindow(display);
 
-	KeyCode keys[4];
-	keys[0] = XKeysymToKeycode(display, XK_r);
-	keys[1] = XKeysymToKeycode(display, XK_e);
-	keys[2] = XKeysymToKeycode(display, XK_s);
-	keys[3] = XKeysymToKeycode(display, XK_g);
+    KeyCode keys[4];
+    keys[0] = XKeysymToKeycode(display, XK_r);
+    keys[1] = XKeysymToKeycode(display, XK_e);
+    keys[2] = XKeysymToKeycode(display, XK_q); // تم التعديل من XK_s إلى XK_q
+    keys[3] = XKeysymToKeycode(display, XK_g);
 
-	unsigned int modifiers[] = {
-		ControlMask,
-		ControlMask | LockMask,
-		ControlMask | Mod2Mask,
-		ControlMask | LockMask | Mod2Mask
-	};
+    unsigned int modifiers[] = {
+        ControlMask,
+        ControlMask | LockMask,
+        ControlMask | Mod2Mask,
+        ControlMask | LockMask | Mod2Mask
+    };
 
-	for (int i = 0; i < 4; i++) {
-		for (int j = 0; j < 4; j++) {
-			XUngrabKey(display, keys[i], modifiers[j], root);
-		}
-	}
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            XUngrabKey(display, keys[i], modifiers[j], root);
+        }
+    }
 
-	XSync(display, False);
-	XCloseDisplay(display);
+    XSync(display, False);
+    XCloseDisplay(display);
 }
 */
 import "C"
