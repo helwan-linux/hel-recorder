@@ -1,4 +1,4 @@
-
+//features.go
 package main
 
 import (
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gotk3/gotk3/glib"
+	"github.com/gotk3/gotk3/gtk"
 )
 
 // Countdown
@@ -38,6 +39,38 @@ func (m *RecorderManager) startCountdownLocked(seconds int) {
 	m.ui.BtnStop.SetSensitive(true)
 	m.ui.ComboCountdown.SetSensitive(false)
 
+	// إنشاء نافذة عائمة ثابتة ومستقلة للعداد في منتصف الشاشة
+	var osdWindow *gtk.Window
+	var osdLabel *gtk.Label
+
+	glib.IdleAdd(func() {
+		win, err := gtk.WindowNew(gtk.WINDOW_POPUP)
+		if err == nil {
+			win.SetPosition(gtk.WIN_POS_CENTER)
+			win.SetKeepAbove(true)
+			win.SetAppPaintable(true)
+
+			screen := win.GetScreen()
+			if screen != nil {
+				visual, _ := screen.GetRGBAVisual()
+				if visual != nil {
+					win.SetVisual(visual)
+				}
+			}
+
+			label, err := gtk.LabelNew("")
+			if err == nil {
+				label.SetMarkup(fmt.Sprintf("<span font='80' weight='bold' color='#ff3333'>%02d</span>", seconds))
+				win.Add(label)
+				osdLabel = label
+			}
+
+			win.SetSizeRequest(300, 200)
+			win.ShowAll()
+			osdWindow = win
+		}
+	})
+
 	go func() {
 		for remaining := seconds; remaining > 0; remaining-- {
 			value := remaining
@@ -48,7 +81,15 @@ func (m *RecorderManager) startCountdownLocked(seconds int) {
 				m.mu.Unlock()
 
 				if !active {
+					if osdWindow != nil {
+						osdWindow.Destroy()
+					}
 					return
+				}
+
+				// تحديث النص داخل نفس النافذة العائمة بسلاسة
+				if osdLabel != nil {
+					osdLabel.SetMarkup(fmt.Sprintf("<span font='80' weight='bold' color='#ff3333'>%02d</span>", value))
 				}
 
 				m.ui.LblTimer.SetMarkup(
@@ -73,6 +114,11 @@ func (m *RecorderManager) startCountdownLocked(seconds int) {
 					default:
 					}
 				}
+				glib.IdleAdd(func() {
+					if osdWindow != nil {
+						osdWindow.Destroy()
+					}
+				})
 				return
 
 			case <-timer.C:
@@ -80,6 +126,10 @@ func (m *RecorderManager) startCountdownLocked(seconds int) {
 		}
 
 		glib.IdleAdd(func() {
+			if osdWindow != nil {
+				osdWindow.Destroy()
+			}
+
 			m.mu.Lock()
 			defer m.mu.Unlock()
 

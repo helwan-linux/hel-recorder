@@ -1,4 +1,4 @@
-
+//x11_hotkeys.go
 package main
 
 /*
@@ -25,12 +25,13 @@ static Display* hsr_open_and_grab(void) {
 
 	Window root = DefaultRootWindow(display);
 
-	KeyCode keys[3];
+	KeyCode keys[4];
 	keys[0] = XKeysymToKeycode(display, XK_r);
-	keys[1] = XKeysymToKeycode(display, XK_s);
-	keys[2] = XKeysymToKeycode(display, XK_g);
+	keys[1] = XKeysymToKeycode(display, XK_e);
+	keys[2] = XKeysymToKeycode(display, XK_s);
+	keys[3] = XKeysymToKeycode(display, XK_g);
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		if (keys[i] == 0) {
 			XCloseDisplay(display);
 			return NULL;
@@ -49,7 +50,7 @@ static Display* hsr_open_and_grab(void) {
 	int (*old_handler)(Display *, XErrorEvent *);
 	old_handler = XSetErrorHandler(hsr_x_error_handler);
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		for (int j = 0; j < 4; j++) {
 			XGrabKey(
 				display,
@@ -67,7 +68,7 @@ static Display* hsr_open_and_grab(void) {
 	XSetErrorHandler(old_handler);
 
 	if (hsr_grab_error) {
-		for (int i = 0; i < 3; i++) {
+		for (int i = 0; i < 4; i++) {
 			for (int j = 0; j < 4; j++) {
 				XUngrabKey(display, keys[i], modifiers[j], root);
 			}
@@ -102,12 +103,15 @@ static int hsr_poll_hotkey(Display *display) {
 		case XK_r:
 		case XK_R:
 			return 1;
+		case XK_e:
+		case XK_E:
+			return 2;
 		case XK_s:
 		case XK_S:
-			return 2;
+			return 3;
 		case XK_g:
 		case XK_G:
-			return 3;
+			return 4;
 	}
 
 	return 0;
@@ -120,10 +124,11 @@ static void hsr_close_hotkeys(Display *display) {
 
 	Window root = DefaultRootWindow(display);
 
-	KeyCode keys[3];
+	KeyCode keys[4];
 	keys[0] = XKeysymToKeycode(display, XK_r);
-	keys[1] = XKeysymToKeycode(display, XK_s);
-	keys[2] = XKeysymToKeycode(display, XK_g);
+	keys[1] = XKeysymToKeycode(display, XK_e);
+	keys[2] = XKeysymToKeycode(display, XK_s);
+	keys[3] = XKeysymToKeycode(display, XK_g);
 
 	unsigned int modifiers[] = {
 		ControlMask,
@@ -132,7 +137,7 @@ static void hsr_close_hotkeys(Display *display) {
 		ControlMask | LockMask | Mod2Mask
 	};
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		for (int j = 0; j < 4; j++) {
 			XUngrabKey(display, keys[i], modifiers[j], root);
 		}
@@ -197,10 +202,15 @@ func (h *GlobalHotkeys) run(manager *RecorderManager) {
 		glib.IdleAdd(func() {
 			switch key {
 			case 1:
-				manager.ToggleRecordPause()
+				manager.StartRecording()
+
 			case 2:
-				manager.StopRecording()
+				manager.PauseResumeRecording()
+
 			case 3:
+				manager.StopRecording()
+
+			case 4:
 				manager.ToggleMagnifier()
 			}
 		})
@@ -217,4 +227,3 @@ func (h *GlobalHotkeys) Stop() {
 		<-h.done
 	})
 }
-

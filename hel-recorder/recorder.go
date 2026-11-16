@@ -1,3 +1,4 @@
+//recorder.go
 package main
 
 import (
@@ -41,8 +42,10 @@ type RecorderManager struct {
 	stopTicker  chan struct{}
 	processDone chan struct{}
 
-	outputFile string
-	stderr     *bytes.Buffer
+	outputFile      string
+	tempPartFiles   []string
+	currentPartFile string
+	stderr          *bytes.Buffer
 
 	countdownCancel chan struct{}
 	countdownActive bool
@@ -55,7 +58,8 @@ type RecorderManager struct {
 func NewRecorderManager(ui *AppUI) *RecorderManager {
 	m := &RecorderManager{ui: ui}
 
-	ui.BtnStart.Connect("clicked", m.ToggleRecordPause)
+	ui.BtnStart.Connect("clicked", m.StartRecording)
+	ui.BtnPause.Connect("clicked", m.PauseResumeRecording)
 	ui.BtnStop.Connect("clicked", m.StopRecording)
 
 	return m
@@ -198,31 +202,44 @@ func (m *RecorderManager) selectedSystemAudio() string {
 		return ""
 	}
 
-	return strings.TrimSpace(m.ui.ComboSystemAudio.GetActiveID())
+	source := m.ui.ComboSystemAudio.GetActiveID()
+	if strings.TrimSpace(source) == "" {
+		output, err := exec.Command("pactl", "get-default-sink").Output()
+		if err == nil {
+			sink := strings.TrimSpace(string(output))
+			if sink != "" {
+				return sink + ".monitor"
+			}
+		}
+		return "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
+	}
+
+	return source
 }
 
-func (m *RecorderManager) ToggleRecordPause() {
+func (m *RecorderManager) StartRecording() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.stopping {
+	if m.stopping || m.isRecording || m.countdownActive {
 		return
 	}
 
-	if m.countdownActive {
-		m.cancelCountdownLocked()
+	seconds := m.selectedCountdown()
+
+	if seconds > 0 {
+		m.startCountdownLocked(seconds)
 		return
 	}
 
-	if !m.isRecording {
-		seconds := m.selectedCountdown()
+	m.startRecordingLocked()
+}
 
-		if seconds > 0 {
-			m.startCountdownLocked(seconds)
-			return
-		}
+func (m *RecorderManager) PauseResumeRecording() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-		m.startRecordingLocked()
+	if m.stopping || !m.isRecording || m.countdownActive {
 		return
 	}
 
@@ -309,10 +326,16 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 
-	outputFile := filepath.Join(
-		saveDir,
-		fmt.Sprintf("Recording_%s_%d.mp4", timestamp, time.Now().UnixNano()),
-	)
+	if m.outputFile == "" {
+		m.outputFile = filepath.Join(
+			saveDir,
+			fmt.Sprintf("Recording_%s_%d.mp4", timestamp, time.Now().UnixNano()),
+		)
+		m.tempPartFiles = []string{}
+	}
+
+	partFile := filepath.Join(os.TempDir(), fmt.Sprintf("hel_rec_part_%d.mp4", time.Now().UnixNano()))
+	m.currentPartFile = partFile
 
 	args := []string{
 		"-y",
@@ -344,8 +367,16 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	args = append(args, "-map", "0:v:0")
 
-	for index := range audioInputs {
-		args = append(args, "-map", fmt.Sprintf("%d:a:0", index+1))
+	if len(audioInputs) == 1 {
+		args = append(args,
+			"-map", "1:a:0",
+		)
+	} else if len(audioInputs) == 2 {
+		args = append(args,
+			"-filter_complex",
+			"[1:a:0][2:a:0]amix=inputs=2:duration=longest:dropout_transition=2[aout]",
+			"-map", "[aout]",
+		)
 	}
 
 	if vaapiDevice != "" {
@@ -374,7 +405,7 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	args = append(args,
 		"-movflags", "+faststart",
-		outputFile,
+		partFile,
 	)
 
 	cmd := exec.Command("ffmpeg", args...)
@@ -396,7 +427,6 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	m.cmd = cmd
 	m.stdinPipe = stdin
-	m.outputFile = outputFile
 	m.stderr = stderr
 
 	m.isRecording = true
@@ -404,8 +434,10 @@ func (m *RecorderManager) startRecordingLocked() {
 	m.stopping = false
 	m.suppressNotifications = false
 
-	m.startTime = time.Now()
-	m.pausedDuration = 0
+	if m.startTime.IsZero() {
+		m.startTime = time.Now()
+		m.pausedDuration = 0
+	}
 
 	m.stopTicker = make(chan struct{})
 	m.processDone = make(chan struct{})
@@ -418,7 +450,9 @@ func (m *RecorderManager) startRecordingLocked() {
 	}
 
 	glib.IdleAdd(func() {
-		m.ui.BtnStart.SetLabel("Pause (Ctrl+R)")
+		m.ui.BtnStart.SetSensitive(false)
+		m.ui.BtnPause.SetSensitive(true)
+		m.ui.BtnPause.SetLabel("Pause (Ctrl+E)")
 		m.ui.BtnStop.SetSensitive(true)
 		m.setControlsSensitive(false)
 		m.ui.LblStatus.SetText("Status: Recording (" + mode + ")")
@@ -430,26 +464,15 @@ func (m *RecorderManager) startRecordingLocked() {
 
 func (m *RecorderManager) setControlsSensitive(enabled bool) {
 	m.ui.ChkAudio.SetSensitive(enabled)
-
-	m.ui.ComboMic.SetSensitive(
-		enabled && m.ui.ChkAudio.GetActive(),
-	)
-
+	m.ui.ComboMic.SetSensitive(enabled && m.ui.ChkAudio.GetActive())
 	m.ui.ChkSystemAudio.SetSensitive(enabled)
-
-	m.ui.ComboSystemAudio.SetSensitive(
-		enabled &&
-			m.ui.ChkSystemAudio.GetActive() &&
-			m.ui.ComboSystemAudio.GetActiveID() != "",
-	)
-
+	m.ui.ComboSystemAudio.SetSensitive(enabled && m.ui.ChkAudio.GetActive())
 	m.ui.ComboFPS.SetSensitive(enabled)
 	m.ui.ComboRes.SetSensitive(enabled)
 	m.ui.ComboCountdown.SetSensitive(enabled)
 	m.ui.FileChooser.SetSensitive(enabled)
 }
 
-// verifyOutput checks the MP4 metadata and decodes its video stream.
 func verifyOutput(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -480,14 +503,11 @@ func verifyOutput(path string) error {
 		}
 
 		durationValid := false
-
 		for _, line := range strings.Split(text, "\n") {
 			line = strings.TrimSpace(line)
-
 			if strings.HasPrefix(line, "duration=") {
 				value := strings.TrimPrefix(line, "duration=")
 				duration, parseErr := strconv.ParseFloat(value, 64)
-
 				if parseErr == nil && duration > 0 {
 					durationValid = true
 				}
@@ -499,152 +519,215 @@ func verifyOutput(path string) error {
 		}
 	}
 
-	// Decode the entire video stream to catch damaged or incomplete data.
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return fmt.Errorf("FFmpeg is unavailable for video verification")
-	}
-
-	output, decodeErr := exec.Command(
-		ffmpeg,
-		"-v", "error",
-		"-i", path,
-		"-map", "0:v:0",
-		"-f", "null",
-		"-",
-	).CombinedOutput()
-
-	if decodeErr != nil {
-		details := strings.TrimSpace(string(output))
-		if details == "" {
-			details = decodeErr.Error()
-		}
-		return fmt.Errorf("video decoding failed: %s", details)
-	}
-
 	return nil
 }
 
 func (m *RecorderManager) watchProcess(cmd *exec.Cmd, stderr *bytes.Buffer) {
-	// Wait also waits for os/exec to finish copying stderr into the buffer.
 	waitErr := cmd.Wait()
-
 	stderrText := strings.TrimSpace(stderr.String())
 
 	m.mu.Lock()
-
-	outputFile := m.outputFile
+	stopping := m.stopping
+	isPaused := m.isPaused
+	currentPart := m.currentPartFile
 	ticker := m.stopTicker
 	done := m.processDone
-	suppressNotification := m.suppressNotifications
-
-	m.isRecording = false
-	m.isPaused = false
-	m.stopping = false
 
 	m.cmd = nil
 	m.stdinPipe = nil
 	m.stopTicker = nil
-
 	m.mu.Unlock()
 
 	if ticker != nil {
 		close(ticker)
 	}
 
-	var validationErr error
-
-	if waitErr == nil {
-		validationErr = verifyOutput(outputFile)
-	} else {
-		validationErr = waitErr
-
-		if stderrText != "" {
-			validationErr = fmt.Errorf("%w: %s", waitErr, stderrText)
+	if currentPart != "" {
+		if info, err := os.Stat(currentPart); err == nil && info.Size() > 0 {
+			m.mu.Lock()
+			m.tempPartFiles = append(m.tempPartFiles, currentPart)
+			m.currentPartFile = ""
+			m.mu.Unlock()
 		}
 	}
 
-	fileInfo, statErr := os.Stat(outputFile)
-	fileExists := statErr == nil && fileInfo != nil && fileInfo.Size() > 0
-
-	success := waitErr == nil && validationErr == nil
-
-	errorMessage := ""
-	if validationErr != nil {
-		errorMessage = validationErr.Error()
+	if stopping {
+		m.finalizeRecording()
+		if done != nil {
+			close(done)
+		}
+		return
 	}
 
-	glib.IdleAdd(func() {
-		m.ui.BtnStart.SetLabel("Start (Ctrl+R)")
-		m.ui.BtnStop.SetSensitive(false)
-		m.setControlsSensitive(true)
+	if isPaused {
+		return
+	}
 
-		m.ui.LblTimer.SetMarkup(
-			"<span font='28' weight='bold' color='#3584e4'>00:00:00</span>",
-		)
-
-		if success {
-			m.ui.LblStatus.SetText("Status: Video saved successfully!")
-
-			if !suppressNotification {
-				showRecordingResult(m.ui.Window, "success", outputFile, "")
-			}
-		} else if fileExists {
-			m.ui.LblStatus.SetText("Warning: Video may be incomplete")
-
-			if !suppressNotification {
-				showRecordingResult(m.ui.Window, "warning", outputFile, errorMessage)
-			}
-		} else {
-			m.ui.LblStatus.SetText("Error: Video could not be saved")
-
-			if !suppressNotification {
-				showRecordingResult(m.ui.Window, "error", outputFile, errorMessage)
-			}
-		}
-	})
+	if waitErr != nil && !stopping {
+		glib.IdleAdd(func() {
+			m.ui.LblStatus.SetText("Error: Recording interrupted: " + stderrText)
+		})
+	}
 
 	if done != nil {
 		close(done)
 	}
 }
 
-func (m *RecorderManager) pauseRecordingLocked() {
-	if m.cmd == nil || m.cmd.Process == nil {
+func (m *RecorderManager) finalizeRecording() {
+	m.mu.Lock()
+	parts := m.tempPartFiles
+	outputFile := m.outputFile
+	suppressNotification := m.suppressNotifications
+
+	m.isRecording = false
+	m.isPaused = false
+	m.stopping = false
+	m.outputFile = ""
+	m.startTime = time.Time{}
+	m.pausedDuration = 0
+	m.mu.Unlock()
+
+	if len(parts) == 0 {
+		glib.IdleAdd(func() {
+			m.ui.BtnStart.SetSensitive(true)
+			m.ui.BtnPause.SetSensitive(false)
+			m.ui.BtnStop.SetSensitive(false)
+			m.setControlsSensitive(true)
+			m.ui.LblStatus.SetText("Error: No recorded video parts found")
+		})
 		return
 	}
 
-	if err := m.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
-		m.setStatus("Error: Cannot pause recording: " + err.Error())
+	m.setStatus("Status: Merging recorded parts...")
+
+	listFile, err := os.CreateTemp("", "hel_concat_*.txt")
+	if err == nil {
+		listFileName := listFile.Name()
+		for _, p := range parts {
+			_, _ = listFile.WriteString(fmt.Sprintf("file '%s'\n", p))
+		}
+		_ = listFile.Close()
+
+		mergeCmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listFileName, "-c", "copy", outputFile)
+		mergeErr := mergeCmd.Run()
+
+		_ = os.Remove(listFileName)
+		for _, p := range parts {
+			_ = os.Remove(p)
+		}
+
+		validationErr := mergeErr
+		if validationErr == nil {
+			validationErr = verifyOutput(outputFile)
+		}
+
+		fileInfo, statErr := os.Stat(outputFile)
+		fileExists := statErr == nil && fileInfo != nil && fileInfo.Size() > 0
+		success := mergeErr == nil && validationErr == nil
+
+		errorMessage := ""
+		if validationErr != nil {
+			errorMessage = validationErr.Error()
+		}
+
+		glib.IdleAdd(func() {
+			m.ui.BtnStart.SetSensitive(true)
+			m.ui.BtnPause.SetSensitive(false)
+			m.ui.BtnPause.SetLabel("Pause (Ctrl+E)")
+			m.ui.BtnStop.SetSensitive(false)
+			m.setControlsSensitive(true)
+
+			m.ui.LblTimer.SetMarkup(
+				"<span font='28' weight='bold' color='#3584e4'>00:00:00</span>",
+			)
+
+			if success {
+				m.ui.LblStatus.SetText("Status: Video saved successfully!")
+				if !suppressNotification {
+					showRecordingResult(m.ui.Window, "success", outputFile, "")
+				}
+			} else if fileExists {
+				m.ui.LblStatus.SetText("Warning: Video may be incomplete")
+				if !suppressNotification {
+					showRecordingResult(m.ui.Window, "warning", outputFile, errorMessage)
+				}
+			} else {
+				m.ui.LblStatus.SetText("Error: Video could not be saved")
+				if !suppressNotification {
+					showRecordingResult(m.ui.Window, "error", outputFile, errorMessage)
+				}
+			}
+		})
 		return
+	}
+
+	glib.IdleAdd(func() {
+		m.ui.BtnStart.SetSensitive(true)
+		m.ui.BtnPause.SetSensitive(false)
+		m.ui.BtnStop.SetSensitive(false)
+		m.setControlsSensitive(true)
+		m.ui.LblStatus.SetText("Error: Cannot create temporary merge list")
+	})
+}
+
+func (m *RecorderManager) pauseRecordingLocked() {
+	if m.stdinPipe == nil || m.cmd == nil {
+		return
+	}
+
+	if m.ui.ChkAudio != nil && m.ui.ChkAudio.GetActive() {
+		micSource := m.selectedMicrophone()
+		if micSource != "" && micSource != "default" {
+			_ = exec.Command("pactl", "set-source-mute", micSource, "1").Run()
+		} else {
+			_ = exec.Command("pactl", "set-source-mute", "@DEFAULT_SOURCE@", "1").Run()
+		}
+	}
+	if m.ui.ChkSystemAudio != nil && m.ui.ChkSystemAudio.GetActive() {
+		sysSource := m.selectedSystemAudio()
+		if sysSource != "" {
+			_ = exec.Command("pactl", "set-source-mute", sysSource, "1").Run()
+		}
 	}
 
 	m.isPaused = true
 	m.pauseStart = time.Now()
 
+	_, _ = m.stdinPipe.Write([]byte("q\n"))
+	_ = m.stdinPipe.Close()
+
 	glib.IdleAdd(func() {
-		m.ui.BtnStart.SetLabel("Resume (Ctrl+R)")
+		m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
 		m.ui.LblStatus.SetText("Status: Paused")
 	})
 }
 
 func (m *RecorderManager) resumeRecordingLocked() {
-	if m.cmd == nil || m.cmd.Process == nil {
-		return
-	}
-
-	if err := m.cmd.Process.Signal(syscall.SIGCONT); err != nil {
-		m.setStatus("Error: Cannot resume recording: " + err.Error())
-		return
-	}
-
-	m.pausedDuration += time.Since(m.pauseStart)
 	m.isPaused = false
+	m.pausedDuration += time.Since(m.pauseStart)
+
+	if m.ui.ChkAudio != nil && m.ui.ChkAudio.GetActive() {
+		micSource := m.selectedMicrophone()
+		if micSource != "" && micSource != "default" {
+			_ = exec.Command("pactl", "set-source-mute", micSource, "0").Run()
+		} else {
+			_ = exec.Command("pactl", "set-source-mute", "@DEFAULT_SOURCE@", "0").Run()
+		}
+	}
+	if m.ui.ChkSystemAudio != nil && m.ui.ChkSystemAudio.GetActive() {
+		sysSource := m.selectedSystemAudio()
+		if sysSource != "" {
+			_ = exec.Command("pactl", "set-source-mute", sysSource, "0").Run()
+		}
+	}
 
 	glib.IdleAdd(func() {
-		m.ui.BtnStart.SetLabel("Pause (Ctrl+R)")
+		m.ui.BtnPause.SetLabel("Pause (Ctrl+E)")
 		m.ui.LblStatus.SetText("Status: Recording...")
 	})
+
+	go m.startRecordingLocked()
 }
 
 func (m *RecorderManager) StopRecording() {
@@ -656,21 +739,22 @@ func (m *RecorderManager) StopRecording() {
 		return
 	}
 
-	if !m.isRecording || m.stopping {
+	if !m.isRecording && !m.isPaused {
 		m.mu.Unlock()
 		return
 	}
 
 	m.stopping = true
-
+	isPaused := m.isPaused
 	cmd := m.cmd
 	stdin := m.stdinPipe
-	done := m.processDone
 
-	if m.isPaused && cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Signal(syscall.SIGCONT)
-		m.pausedDuration += time.Since(m.pauseStart)
+	if isPaused {
 		m.isPaused = false
+		m.mu.Unlock()
+		m.setStatus("Status: Stopping and saving...")
+		go m.finalizeRecording()
+		return
 	}
 
 	m.mu.Unlock()
@@ -678,48 +762,24 @@ func (m *RecorderManager) StopRecording() {
 	m.setStatus("Status: Stopping and saving...")
 
 	if stdin != nil {
-		_, err := stdin.Write([]byte("q\n"))
+		_, _ = stdin.Write([]byte("q\n"))
 		_ = stdin.Close()
-
-		if err != nil && cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGINT)
-		}
 	} else if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(syscall.SIGINT)
-	}
-
-	if cmd != nil && cmd.Process != nil && done != nil {
-		go func() {
-			select {
-			case <-done:
-				return
-			case <-time.After(stopTimeout):
-				_ = cmd.Process.Kill()
-			}
-		}()
 	}
 }
 
 func (m *RecorderManager) WaitForStop() {
 	m.mu.Lock()
-
 	m.suppressNotifications = true
-
 	if m.countdownActive {
 		m.cancelCountdownLocked()
 	}
-
-	recording := m.isRecording
-	done := m.processDone
-
+	recording := m.isRecording || m.isPaused
 	m.mu.Unlock()
 
 	if recording {
 		m.StopRecording()
-	}
-
-	if done != nil {
-		<-done
 	}
 }
 
@@ -734,7 +794,6 @@ func (m *RecorderManager) runTimer(stop <-chan struct{}) {
 
 		case <-ticker.C:
 			m.mu.Lock()
-
 			if !m.isRecording {
 				m.mu.Unlock()
 				return
@@ -746,7 +805,6 @@ func (m *RecorderManager) runTimer(stop <-chan struct{}) {
 			}
 
 			elapsed := time.Since(m.startTime) - m.pausedDuration
-
 			m.mu.Unlock()
 
 			if elapsed < 0 {

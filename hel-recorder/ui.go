@@ -1,4 +1,4 @@
-
+//ui.go
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 type AppUI struct {
 	Window           *gtk.Window
 	BtnStart         *gtk.Button
+	BtnPause         *gtk.Button
 	BtnStop          *gtk.Button
 	LblTimer         *gtk.Label
 	LblStatus        *gtk.Label
@@ -209,14 +210,18 @@ func InitUI() (*AppUI, *gtk.Window) {
 	hboxFolder.PackStart(fileChooser, true, true, 0)
 	vbox.PackStart(hboxFolder, false, false, 0)
 
-	hboxButtons, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 12)
+	hboxButtons, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
 	hboxButtons.SetHomogeneous(true)
 
 	btnStart, _ := gtk.ButtonNewWithLabel("Start (Ctrl+R)")
+	btnPause, _ := gtk.ButtonNewWithLabel("Pause (Ctrl+E)")
 	btnStop, _ := gtk.ButtonNewWithLabel("Stop (Ctrl+S)")
+
+	btnPause.SetSensitive(false)
 	btnStop.SetSensitive(false)
 
 	hboxButtons.PackStart(btnStart, true, true, 0)
+	hboxButtons.PackStart(btnPause, true, true, 0)
 	hboxButtons.PackStart(btnStop, true, true, 0)
 	vbox.PackEnd(hboxButtons, false, false, 0)
 
@@ -231,6 +236,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	ui := &AppUI{
 		Window:           win,
 		BtnStart:         btnStart,
+		BtnPause:         btnPause,
 		BtnStop:          btnStop,
 		LblTimer:         lblTimer,
 		LblStatus:        lblStatus,
@@ -300,7 +306,8 @@ func showHelpDialog(parent *gtk.Window) {
 		gtk.BUTTONS_OK,
 		"%s",
 		"Keyboard Shortcuts:\n\n"+
-			"Ctrl + R: Start / Pause / Resume / Cancel Countdown\n"+
+			"Ctrl + R: Start recording\n"+
+			"Ctrl + E: Pause / Resume recording\n"+
 			"Ctrl + S: Stop and save\n"+
 			"Ctrl + G: Toggle Magnifier\n\n"+
 			"Select a countdown delay before recording.\n"+
