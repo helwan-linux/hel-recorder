@@ -13,6 +13,8 @@ depends=(
     'libpulse'
     'libx11'
     'kmag'
+    'slop'
+    'screenkey'
 )
 
 makedepends=(
