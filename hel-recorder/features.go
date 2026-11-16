@@ -39,7 +39,6 @@ func (m *RecorderManager) startCountdownLocked(seconds int) {
 	m.ui.BtnStop.SetSensitive(true)
 	m.ui.ComboCountdown.SetSensitive(false)
 
-	// إنشاء نافذة عائمة ثابتة ومستقلة للعداد في منتصف الشاشة
 	var osdWindow *gtk.Window
 	var osdLabel *gtk.Label
 
@@ -87,7 +86,6 @@ func (m *RecorderManager) startCountdownLocked(seconds int) {
 					return
 				}
 
-				// تحديث النص داخل نفس النافذة العائمة بسلاسة
 				if osdLabel != nil {
 					osdLabel.SetMarkup(fmt.Sprintf("<span font='80' weight='bold' color='#ff3333'>%02d</span>", value))
 				}
@@ -235,6 +233,46 @@ func (m *RecorderManager) StopMagnifier() {
 		cmd := m.magnifierCmd
 		m.magnifierCmd = nil
 
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
+}
+
+// Keystrokes Overlay - Screenkey
+
+func (m *RecorderManager) startScreenkeyLocked() {
+	if m.screenkeyCmd != nil {
+		return
+	}
+
+	path, err := exec.LookPath("screenkey")
+	if err != nil {
+		m.setStatus("Warning: screenkey is not installed")
+		return
+	}
+
+	cmd := exec.Command(path)
+	if err := cmd.Start(); err != nil {
+		return
+	}
+
+	m.screenkeyCmd = cmd
+
+	go func(c *exec.Cmd) {
+		_ = c.Wait()
+		m.mu.Lock()
+		if m.screenkeyCmd == c {
+			m.screenkeyCmd = nil
+		}
+		m.mu.Unlock()
+	}(cmd)
+}
+
+func (m *RecorderManager) stopScreenkeyLocked() {
+	if m.screenkeyCmd != nil {
+		cmd := m.screenkeyCmd
+		m.screenkeyCmd = nil
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}

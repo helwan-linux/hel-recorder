@@ -5,29 +5,34 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/gtk"
 )
 
 type AppUI struct {
-	Window             *gtk.Window
-	BtnStart           *gtk.Button
-	BtnPause           *gtk.Button
-	BtnStop            *gtk.Button
-	LblTimer           *gtk.Label
-	LblStatus          *gtk.Label
-	ChkAudio           *gtk.CheckButton
-	ComboMic           *gtk.ComboBoxText
-	ChkSystemAudio     *gtk.CheckButton
-	ComboSystemAudio   *gtk.ComboBoxText
-	ComboFPS           *gtk.ComboBoxText
-	ComboRes           *gtk.ComboBoxText
-	ComboCountdown     *gtk.ComboBoxText
-	FileChooser        *gtk.FileChooserButton
-	BtnHelp            *gtk.Button
-	BtnAbout           *gtk.Button
+	Window           *gtk.Window
+	BtnStart         *gtk.Button
+	BtnPause         *gtk.Button
+	BtnStop          *gtk.Button
+	LblTimer         *gtk.Label
+	LblStatus        *gtk.Label
+	ChkAudio         *gtk.CheckButton
+	ComboMic         *gtk.ComboBoxText
+	ChkSystemAudio   *gtk.CheckButton
+	ComboSystemAudio *gtk.ComboBoxText
+	ComboFPS         *gtk.ComboBoxText
+	ComboRes         *gtk.ComboBoxText
+	ComboCountdown   *gtk.ComboBoxText
+	ChkMinimize      *gtk.CheckButton
+	ChkScreenkey     *gtk.CheckButton
+	ChkWebcam        *gtk.CheckButton
+	FileChooser      *gtk.FileChooserButton
+	BtnHelp          *gtk.Button
+	BtnAbout         *gtk.Button
+	AppIconPixbuf    *gdk.Pixbuf
 }
 
-func setRecorderIcon(win *gtk.Window) {
+func loadAppIconPixbuf() *gdk.Pixbuf {
 	paths := []string{}
 
 	exePath, err := os.Executable()
@@ -44,16 +49,24 @@ func setRecorderIcon(win *gtk.Window) {
 		)
 	}
 
+	paths = append(paths, "/usr/share/icons/hicolor/128x128/apps/hel-recorder.png")
+
 	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
 			continue
 		}
 
-		if win.SetIconFromFile(path) == nil {
-			return
+		if pb, err := gdk.PixbufNewFromFile(path); err == nil {
+			return pb
 		}
 	}
+	return nil
+}
+
+func hasWebcamDevice() bool {
+	info, err := os.Stat("/dev/video0")
+	return err == nil && !info.IsDir()
 }
 
 func InitUI() (*AppUI, *gtk.Window) {
@@ -63,12 +76,16 @@ func InitUI() (*AppUI, *gtk.Window) {
 	}
 
 	win.SetTitle("Helwan Screen Recorder")
-	win.SetDefaultSize(500, 570)
+	win.SetDefaultSize(500, 660)
 	win.SetPosition(gtk.WIN_POS_CENTER)
 	win.SetResizable(false)
-	setRecorderIcon(win)
 
-	vbox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 12)
+	iconPixbuf := loadAppIconPixbuf()
+	if iconPixbuf != nil {
+		win.SetIcon(iconPixbuf)
+	}
+
+	vbox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 10)
 	vbox.SetMarginTop(14)
 	vbox.SetMarginBottom(14)
 	vbox.SetMarginStart(14)
@@ -93,10 +110,10 @@ func InitUI() (*AppUI, *gtk.Window) {
 	vbox.PackStart(lblStatus, false, false, 0)
 
 	sep, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
-	vbox.PackStart(sep, false, false, 4)
+	vbox.PackStart(sep, false, false, 2)
 
 	grid, _ := gtk.GridNew()
-	grid.SetRowSpacing(10)
+	grid.SetRowSpacing(8)
 	grid.SetColumnSpacing(10)
 	vbox.PackStart(grid, false, false, 0)
 
@@ -113,6 +130,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	lblRes.SetHAlign(gtk.ALIGN_START)
 	comboRes, _ := gtk.ComboBoxTextNew()
 	comboRes.Append("auto", "Full Screen (Native)")
+	comboRes.Append("area", "Select Area (slop)")
 	comboRes.SetActiveID("auto")
 	grid.Attach(lblRes, 0, 1, 1, 1)
 	grid.Attach(comboRes, 1, 1, 1, 1)
@@ -189,6 +207,23 @@ func InitUI() (*AppUI, *gtk.Window) {
 		lblStatus.SetText("Status: Ready - Audio sources unavailable")
 	}
 
+	sep2, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	vbox.PackStart(sep2, false, false, 2)
+
+	chkMinimize, _ := gtk.CheckButtonNewWithLabel("Minimize window automatically on start")
+	chkMinimize.SetActive(true)
+	vbox.PackStart(chkMinimize, false, false, 0)
+
+	chkScreenkey, _ := gtk.CheckButtonNewWithLabel("Show Keystrokes on screen (screenkey)")
+	vbox.PackStart(chkScreenkey, false, false, 0)
+
+	chkWebcam, _ := gtk.CheckButtonNewWithLabel("Webcam Overlay (Bottom-Right PiP)")
+	if !hasWebcamDevice() {
+		chkWebcam.SetSensitive(false)
+		chkWebcam.SetTooltipText("No webcam detected at /dev/video0")
+	}
+	vbox.PackStart(chkWebcam, false, false, 0)
+
 	hboxFolder, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
 	lblFolder, _ := gtk.LabelNew("Save Directory:")
 
@@ -230,7 +265,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	})
 
 	btnAbout.Connect("clicked", func() {
-		showAboutDialog(win)
+		showAboutDialog(win, iconPixbuf)
 	})
 
 	ui := &AppUI{
@@ -247,12 +282,43 @@ func InitUI() (*AppUI, *gtk.Window) {
 		ComboFPS:         comboFPS,
 		ComboRes:         comboRes,
 		ComboCountdown:   comboCountdown,
+		ChkMinimize:      chkMinimize,
+		ChkScreenkey:     chkScreenkey,
+		ChkWebcam:        chkWebcam,
 		FileChooser:      fileChooser,
 		BtnHelp:          btnHelp,
 		BtnAbout:         btnAbout,
+		AppIconPixbuf:    iconPixbuf,
 	}
 
 	return ui, win
+}
+
+func showMicMutedDialog(parent *gtk.Window) string {
+	dialog := gtk.MessageDialogNew(
+		parent,
+		gtk.DIALOG_MODAL,
+		gtk.MESSAGE_WARNING,
+		gtk.BUTTONS_NONE,
+		"%s",
+		"Your selected microphone is currently MUTED.\n\nWould you like to unmute it and start recording?",
+	)
+	dialog.SetTitle("Microphone Muted")
+	dialog.AddButton("Unmute & Record", gtk.RESPONSE_YES)
+	dialog.AddButton("Record Muted", gtk.RESPONSE_NO)
+	dialog.AddButton("Cancel", gtk.RESPONSE_CANCEL)
+
+	resp := dialog.Run()
+	dialog.Destroy()
+
+	switch resp {
+	case gtk.RESPONSE_YES:
+		return "unmute"
+	case gtk.RESPONSE_NO:
+		return "keep"
+	default:
+		return "cancel"
+	}
 }
 
 func showRecordingResult(
@@ -310,23 +376,26 @@ func showHelpDialog(parent *gtk.Window) {
 			"Ctrl + E: Pause / Resume recording\n"+
 			"Ctrl + Q: Stop and save\n"+
 			"Ctrl + G: Toggle Magnifier\n\n"+
-			"Select a countdown delay before recording.\n"+
-			"Microphone and system audio can be recorded independently.\n"+
-			"Recordings are saved as MP4.\n\n"+
-			"Magnifier requires X11.",
+			"Features:\n"+
+			"- Select Area requires 'slop' package.\n"+
+			"- Keystrokes overlay requires 'screenkey' package.\n"+
+			"- Webcam PiP uses /dev/video0.",
 	)
 	dialog.SetTitle("Help - Helwan Recorder")
 	dialog.Run()
 	dialog.Destroy()
 }
 
-func showAboutDialog(parent *gtk.Window) {
+func showAboutDialog(parent *gtk.Window, logo *gdk.Pixbuf) {
 	dialog, err := gtk.AboutDialogNew()
 	if err != nil {
 		return
 	}
 
 	dialog.SetTransientFor(parent)
+	if logo != nil {
+		dialog.SetLogo(logo)
+	}
 	dialog.SetProgramName("Helwan Screen Recorder")
 	dialog.SetVersion("1.0.0")
 	dialog.SetComments("Screen and audio recorder for Helwan Linux.")

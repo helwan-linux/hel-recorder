@@ -51,6 +51,10 @@ type RecorderManager struct {
 	countdownActive bool
 
 	magnifierCmd *exec.Cmd
+	screenkeyCmd *exec.Cmd
+
+	activeRes    string
+	activeOffset string
 
 	suppressNotifications bool
 }
@@ -63,6 +67,19 @@ func NewRecorderManager(ui *AppUI) *RecorderManager {
 	ui.BtnStop.Connect("clicked", m.StopRecording)
 
 	return m
+}
+
+func (m *RecorderManager) updateWindowState(state string) {
+	glib.IdleAdd(func() {
+		switch state {
+		case "recording":
+			m.ui.Window.SetTitle("🔴 [REC] Helwan Screen Recorder")
+		case "paused":
+			m.ui.Window.SetTitle("⏸ [PAUSED] Helwan Screen Recorder")
+		default:
+			m.ui.Window.SetTitle("Helwan Screen Recorder")
+		}
+	})
 }
 
 func (m *RecorderManager) setStatus(status string) {
@@ -91,6 +108,44 @@ func getNativeResolution() (string, error) {
 	}
 
 	return "", fmt.Errorf("cannot detect X11 desktop dimensions")
+}
+
+func selectAreaWithSlop() (string, string, error) {
+	slopPath, err := exec.LookPath("slop")
+	if err != nil {
+		return "", "", fmt.Errorf("'slop' is not installed (install with: sudo pacman -S slop)")
+	}
+
+	out, err := exec.Command(slopPath, "-f", "%wx%h+%x,%y").Output()
+	if err != nil {
+		return "", "", fmt.Errorf("area selection cancelled")
+	}
+
+	raw := strings.TrimSpace(string(out))
+	parts := strings.SplitN(raw, "+", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid area format from slop")
+	}
+
+	dims := strings.SplitN(parts[0], "x", 2)
+	if len(dims) != 2 {
+		return "", "", fmt.Errorf("invalid dimensions from slop")
+	}
+
+	w, err1 := strconv.Atoi(dims[0])
+	h, err2 := strconv.Atoi(dims[1])
+	if err1 != nil || err2 != nil || w < 16 || h < 16 {
+		return "", "", fmt.Errorf("selected area is too small")
+	}
+
+	if w%2 != 0 {
+		w--
+	}
+	if h%2 != 0 {
+		h--
+	}
+
+	return fmt.Sprintf("%dx%d", w, h), "+" + parts[1], nil
 }
 
 func getPulseSources() ([]string, error) {
@@ -143,6 +198,32 @@ func GetSystemAudioSources() ([]string, error) {
 	}
 
 	return result, nil
+}
+
+func isSourceMuted(source string) bool {
+	target := source
+	if target == "" || target == "default" {
+		target = "@DEFAULT_SOURCE@"
+	}
+
+	out, err := exec.Command("pactl", "get-source-mute", target).Output()
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(string(out)), "yes")
+}
+
+func setSourceMute(source string, mute bool) {
+	target := source
+	if target == "" || target == "default" {
+		target = "@DEFAULT_SOURCE@"
+	}
+	val := "0"
+	if mute {
+		val = "1"
+	}
+	_ = exec.Command("pactl", "set-source-mute", target, val).Run()
 }
 
 func detectVAAPI() string {
@@ -219,20 +300,74 @@ func (m *RecorderManager) selectedSystemAudio() string {
 
 func (m *RecorderManager) StartRecording() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.stopping || m.isRecording || m.countdownActive {
+		m.mu.Unlock()
 		return
+	}
+
+	if m.ui.ChkAudio != nil && m.ui.ChkAudio.GetActive() {
+		micSource := m.selectedMicrophone()
+		if isSourceMuted(micSource) {
+			m.mu.Unlock()
+			choice := showMicMutedDialog(m.ui.Window)
+			if choice == "cancel" {
+				m.setStatus("Status: Recording cancelled (mic muted)")
+				return
+			}
+			if choice == "unmute" {
+				setSourceMute(micSource, false)
+			}
+			m.mu.Lock()
+			if m.stopping || m.isRecording || m.countdownActive {
+				m.mu.Unlock()
+				return
+			}
+		}
+	}
+
+	resMode := m.ui.ComboRes.GetActiveID()
+	if resMode == "area" {
+		m.mu.Unlock()
+		m.setStatus("Status: Drag mouse to select recording area...")
+		areaRes, areaOffset, err := selectAreaWithSlop()
+		if err != nil {
+			m.setStatus("Error: " + err.Error())
+			return
+		}
+		m.mu.Lock()
+		if m.stopping || m.isRecording || m.countdownActive {
+			m.mu.Unlock()
+			return
+		}
+		m.activeRes = areaRes
+		m.activeOffset = areaOffset
+	} else {
+		nativeRes, err := getNativeResolution()
+		if err != nil {
+			m.mu.Unlock()
+			m.setStatus("Error: Cannot detect desktop resolution")
+			return
+		}
+		m.activeRes = nativeRes
+		m.activeOffset = ""
+	}
+
+	if m.ui.ChkMinimize != nil && m.ui.ChkMinimize.GetActive() {
+		glib.IdleAdd(func() {
+			m.ui.Window.Iconify()
+		})
 	}
 
 	seconds := m.selectedCountdown()
 
 	if seconds > 0 {
 		m.startCountdownLocked(seconds)
+		m.mu.Unlock()
 		return
 	}
 
 	m.startRecordingLocked()
+	m.mu.Unlock()
 }
 
 func (m *RecorderManager) PauseResumeRecording() {
@@ -255,23 +390,27 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	if saveDir == "" {
 		m.setStatus("Error: Select a save directory")
+		m.restoreWindow()
 		return
 	}
 
 	info, err := os.Stat(saveDir)
 	if err != nil || !info.IsDir() {
 		m.setStatus("Error: Invalid save directory")
+		m.restoreWindow()
 		return
 	}
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		m.setStatus("Error: FFmpeg is not installed")
+		m.restoreWindow()
 		return
 	}
 
 	display := os.Getenv("DISPLAY")
 	if display == "" {
 		m.setStatus("Error: X11 DISPLAY is not available")
+		m.restoreWindow()
 		return
 	}
 
@@ -280,11 +419,12 @@ func (m *RecorderManager) startRecordingLocked() {
 		fps = "30"
 	}
 
-	res := m.ui.ComboRes.GetActiveID()
-	if res == "" || res == "auto" {
+	res := m.activeRes
+	if res == "" {
 		res, err = getNativeResolution()
 		if err != nil {
 			m.setStatus("Error: Cannot detect desktop resolution")
+			m.restoreWindow()
 			return
 		}
 	}
@@ -296,6 +436,7 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	if !validResolution {
 		m.setStatus("Error: Invalid resolution")
+		m.restoreWindow()
 		return
 	}
 
@@ -305,6 +446,7 @@ func (m *RecorderManager) startRecordingLocked() {
 	if recordMic || recordSystem {
 		if _, err := exec.LookPath("pactl"); err != nil {
 			m.setStatus("Error: pactl is required for audio recording")
+			m.restoreWindow()
 			return
 		}
 	}
@@ -319,9 +461,17 @@ func (m *RecorderManager) startRecordingLocked() {
 		source := m.selectedSystemAudio()
 		if source == "" {
 			m.setStatus("Error: Select a system audio source")
+			m.restoreWindow()
 			return
 		}
 		audioInputs = append(audioInputs, source)
+	}
+
+	useWebcam := m.ui.ChkWebcam != nil && m.ui.ChkWebcam.GetActive() && hasWebcamDevice()
+	useScreenkey := m.ui.ChkScreenkey != nil && m.ui.ChkScreenkey.GetActive()
+
+	if useScreenkey {
+		m.startScreenkeyLocked()
 	}
 
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
@@ -349,48 +499,93 @@ func (m *RecorderManager) startRecordingLocked() {
 		args = append(args, "-vaapi_device", vaapiDevice)
 	}
 
+	grabInput := display + m.activeOffset
+
 	args = append(args,
 		"-thread_queue_size", inputQueueSize,
 		"-f", "x11grab",
 		"-framerate", fps,
 		"-video_size", res,
-		"-i", display,
+		"-i", grabInput,
 	)
 
+	nextInputIdx := 1
+	webcamInputIdx := -1
+
+	if useWebcam {
+		args = append(args,
+			"-thread_queue_size", inputQueueSize,
+			"-f", "v4l2",
+			"-video_size", "320x240",
+			"-framerate", fps,
+			"-i", "/dev/video0",
+		)
+		webcamInputIdx = nextInputIdx
+		nextInputIdx++
+	}
+
+	audioInputIndices := make([]int, 0, 2)
 	for _, source := range audioInputs {
 		args = append(args,
 			"-thread_queue_size", inputQueueSize,
 			"-f", "pulse",
 			"-i", source,
 		)
+		audioInputIndices = append(audioInputIndices, nextInputIdx)
+		nextInputIdx++
 	}
 
-	args = append(args, "-map", "0:v:0")
+	var filterComplex []string
+	videoMap := "0:v:0"
 
-	if len(audioInputs) == 1 {
-		args = append(args,
-			"-map", "1:a:0",
+	if useWebcam {
+		if vaapiDevice != "" {
+			filterComplex = append(filterComplex,
+				fmt.Sprintf("[%d:v]scale=320:240[cam];[0:v][cam]overlay=W-w-20:H-h-20,format=nv12,hwupload[vout]", webcamInputIdx),
+			)
+		} else {
+			filterComplex = append(filterComplex,
+				fmt.Sprintf("[%d:v]scale=320:240[cam];[0:v][cam]overlay=W-w-20:H-h-20,format=yuv420p[vout]", webcamInputIdx),
+			)
+		}
+		videoMap = "[vout]"
+	}
+
+	audioMap := ""
+	if len(audioInputIndices) == 1 {
+		audioMap = fmt.Sprintf("%d:a:0", audioInputIndices[0])
+	} else if len(audioInputIndices) == 2 {
+		filterComplex = append(filterComplex,
+			fmt.Sprintf("[%d:a:0][%d:a:0]amix=inputs=2:duration=longest:dropout_transition=2[aout]", audioInputIndices[0], audioInputIndices[1]),
 		)
-	} else if len(audioInputs) == 2 {
-		args = append(args,
-			"-filter_complex",
-			"[1:a:0][2:a:0]amix=inputs=2:duration=longest:dropout_transition=2[aout]",
-			"-map", "[aout]",
-		)
+		audioMap = "[aout]"
+	}
+
+	if len(filterComplex) > 0 {
+		args = append(args, "-filter_complex", strings.Join(filterComplex, ";"))
+	}
+
+	args = append(args, "-map", videoMap)
+	if audioMap != "" {
+		args = append(args, "-map", audioMap)
 	}
 
 	if vaapiDevice != "" {
+		if !useWebcam {
+			args = append(args, "-vf", "format=nv12,hwupload")
+		}
 		args = append(args,
-			"-vf", "format=nv12,hwupload",
 			"-c:v", "h264_vaapi",
 			"-qp", "20",
 		)
 	} else {
+		if !useWebcam {
+			args = append(args, "-pix_fmt", "yuv420p")
+		}
 		args = append(args,
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-crf", "20",
-			"-pix_fmt", "yuv420p",
 		)
 	}
 
@@ -415,13 +610,17 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		m.stopScreenkeyLocked()
 		m.setStatus("Error: Cannot create FFmpeg input")
+		m.restoreWindow()
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		m.stopScreenkeyLocked()
 		m.setStatus("Error: Cannot start FFmpeg: " + err.Error())
+		m.restoreWindow()
 		return
 	}
 
@@ -449,6 +648,8 @@ func (m *RecorderManager) startRecordingLocked() {
 		mode = "VAAPI"
 	}
 
+	m.updateWindowState("recording")
+
 	glib.IdleAdd(func() {
 		m.ui.BtnStart.SetSensitive(false)
 		m.ui.BtnPause.SetSensitive(true)
@@ -462,14 +663,26 @@ func (m *RecorderManager) startRecordingLocked() {
 	go m.watchProcess(cmd, stderr)
 }
 
+func (m *RecorderManager) restoreWindow() {
+	glib.IdleAdd(func() {
+		m.ui.Window.Deiconify()
+		m.ui.Window.Present()
+	})
+}
+
 func (m *RecorderManager) setControlsSensitive(enabled bool) {
 	m.ui.ChkAudio.SetSensitive(enabled)
 	m.ui.ComboMic.SetSensitive(enabled && m.ui.ChkAudio.GetActive())
 	m.ui.ChkSystemAudio.SetSensitive(enabled)
-	m.ui.ComboSystemAudio.SetSensitive(enabled && m.ui.ChkAudio.GetActive())
+	m.ui.ComboSystemAudio.SetSensitive(enabled && m.ui.ChkSystemAudio.GetActive())
 	m.ui.ComboFPS.SetSensitive(enabled)
 	m.ui.ComboRes.SetSensitive(enabled)
 	m.ui.ComboCountdown.SetSensitive(enabled)
+	m.ui.ChkMinimize.SetSensitive(enabled)
+	m.ui.ChkScreenkey.SetSensitive(enabled)
+	if hasWebcamDevice() {
+		m.ui.ChkWebcam.SetSensitive(enabled)
+	}
 	m.ui.FileChooser.SetSensitive(enabled)
 }
 
@@ -564,7 +777,18 @@ func (m *RecorderManager) watchProcess(cmd *exec.Cmd, stderr *bytes.Buffer) {
 	}
 
 	if waitErr != nil && !stopping {
+		m.mu.Lock()
+		m.stopScreenkeyLocked()
+		m.isRecording = false
+		m.mu.Unlock()
+		m.updateWindowState("ready")
+		m.restoreWindow()
+
 		glib.IdleAdd(func() {
+			m.ui.BtnStart.SetSensitive(true)
+			m.ui.BtnPause.SetSensitive(false)
+			m.ui.BtnStop.SetSensitive(false)
+			m.setControlsSensitive(true)
 			m.ui.LblStatus.SetText("Error: Recording interrupted: " + stderrText)
 		})
 	}
@@ -580,13 +804,20 @@ func (m *RecorderManager) finalizeRecording() {
 	outputFile := m.outputFile
 	suppressNotification := m.suppressNotifications
 
+	m.stopScreenkeyLocked()
+
 	m.isRecording = false
 	m.isPaused = false
 	m.stopping = false
 	m.outputFile = ""
+	m.activeRes = ""
+	m.activeOffset = ""
 	m.startTime = time.Time{}
 	m.pausedDuration = 0
 	m.mu.Unlock()
+
+	m.updateWindowState("ready")
+	m.restoreWindow()
 
 	if len(parts) == 0 {
 		glib.IdleAdd(func() {
@@ -677,17 +908,12 @@ func (m *RecorderManager) pauseRecordingLocked() {
 	}
 
 	if m.ui.ChkAudio != nil && m.ui.ChkAudio.GetActive() {
-		micSource := m.selectedMicrophone()
-		if micSource != "" && micSource != "default" {
-			_ = exec.Command("pactl", "set-source-mute", micSource, "1").Run()
-		} else {
-			_ = exec.Command("pactl", "set-source-mute", "@DEFAULT_SOURCE@", "1").Run()
-		}
+		setSourceMute(m.selectedMicrophone(), true)
 	}
 	if m.ui.ChkSystemAudio != nil && m.ui.ChkSystemAudio.GetActive() {
 		sysSource := m.selectedSystemAudio()
 		if sysSource != "" {
-			_ = exec.Command("pactl", "set-source-mute", sysSource, "1").Run()
+			setSourceMute(sysSource, true)
 		}
 	}
 
@@ -696,6 +922,8 @@ func (m *RecorderManager) pauseRecordingLocked() {
 
 	_, _ = m.stdinPipe.Write([]byte("q\n"))
 	_ = m.stdinPipe.Close()
+
+	m.updateWindowState("paused")
 
 	glib.IdleAdd(func() {
 		m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
@@ -708,17 +936,12 @@ func (m *RecorderManager) resumeRecordingLocked() {
 	m.pausedDuration += time.Since(m.pauseStart)
 
 	if m.ui.ChkAudio != nil && m.ui.ChkAudio.GetActive() {
-		micSource := m.selectedMicrophone()
-		if micSource != "" && micSource != "default" {
-			_ = exec.Command("pactl", "set-source-mute", micSource, "0").Run()
-		} else {
-			_ = exec.Command("pactl", "set-source-mute", "@DEFAULT_SOURCE@", "0").Run()
-		}
+		setSourceMute(m.selectedMicrophone(), false)
 	}
 	if m.ui.ChkSystemAudio != nil && m.ui.ChkSystemAudio.GetActive() {
 		sysSource := m.selectedSystemAudio()
 		if sysSource != "" {
-			_ = exec.Command("pactl", "set-source-mute", sysSource, "0").Run()
+			setSourceMute(sysSource, false)
 		}
 	}
 
@@ -727,7 +950,11 @@ func (m *RecorderManager) resumeRecordingLocked() {
 		m.ui.LblStatus.SetText("Status: Recording...")
 	})
 
-	go m.startRecordingLocked()
+	go func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.startRecordingLocked()
+	}()
 }
 
 func (m *RecorderManager) StopRecording() {
@@ -735,6 +962,7 @@ func (m *RecorderManager) StopRecording() {
 
 	if m.countdownActive {
 		m.cancelCountdownLocked()
+		m.restoreWindow()
 		m.mu.Unlock()
 		return
 	}
@@ -776,6 +1004,7 @@ func (m *RecorderManager) WaitForStop() {
 		m.cancelCountdownLocked()
 	}
 	recording := m.isRecording || m.isPaused
+	m.stopScreenkeyLocked()
 	m.mu.Unlock()
 
 	if recording {
