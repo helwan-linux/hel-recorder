@@ -1,7 +1,7 @@
 
 pkgname=hsr
-pkgver=0.1.0
-pkgrel=3
+pkgver=1.0.0
+pkgrel=4
 pkgdesc="Helwan Screen Recorder - X11 Screen and Audio Recorder"
 arch=('x86_64')
 url="https://github.com/helwan-linux/hel-recorder"
