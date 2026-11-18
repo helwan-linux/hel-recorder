@@ -1,4 +1,3 @@
-
 pkgname=hsr
 pkgver=1.1.0
 pkgrel=1
@@ -39,6 +38,11 @@ prepare() {
 
     [[ -f assets/icon.png ]] || {
         error "assets/icon.png was not found."
+        return 1
+    }
+
+    [[ -f style.css ]] || {
+        error "style.css was not found."
         return 1
     }
 
@@ -84,18 +88,27 @@ check() {
 package() {
     cd "$srcdir/$pkgname/hel-recorder"
 
+    # Main executable
     install -Dm755 \
         hel-recorder \
         "$pkgdir/usr/bin/hel-recorder"
 
+    # Application icon - 128x128
+    install -Dm644 \
+        assets/icon.png \
+        "$pkgdir/usr/share/icons/hicolor/128x128/apps/hel-recorder.png"
+
+    # Application icon - 256x256
     install -Dm644 \
         assets/icon.png \
         "$pkgdir/usr/share/icons/hicolor/256x256/apps/hel-recorder.png"
 
+    # GTK3 CSS
     install -Dm644 \
-        assets/icon.png \
-        "$pkgdir/usr/share/hel-recorder/assets/icon.png"
+        style.css \
+        "$pkgdir/usr/share/helwan-screen-recorder/style.css"
 
+    # Desktop entry
     install -Dm644 /dev/stdin \
         "$pkgdir/usr/share/applications/helwan-screen-recorder.desktop" <<'EOF'
 [Desktop Entry]
@@ -111,9 +124,9 @@ StartupNotify=true
 StartupWMClass=hel-recorder
 EOF
 
+    # License
     if [[ -f "$srcdir/$pkgname/LICENSE" ]]; then
         install -Dm644 "$srcdir/$pkgname/LICENSE" \
             "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     fi
 }
-
