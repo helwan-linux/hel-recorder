@@ -1,0 +1,186 @@
+#hsr-window {
+			background: #f4f7fb;
+		}
+
+		#hsr-main {
+			background: #f4f7fb;
+		}
+
+		#hsr-title {
+			color: #10233f;
+			font-size: 22px;
+			font-weight: bold;
+		}
+
+		#hsr-subtitle {
+			color: #65748a;
+			font-size: 13px;
+		}
+
+		#hsr-help {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#3d9cff),
+				to(#0874e5)
+			);
+			color: white;
+			border: 1px solid #0762c7;
+			border-radius: 9px;
+			font-weight: bold;
+			padding: 8px 15px;
+		}
+
+		#hsr-about {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#ffffff),
+				to(#e7edf5)
+			);
+			color: #17263f;
+			border: 1px solid #b7c4d5;
+			border-radius: 9px;
+			font-weight: bold;
+			padding: 8px 15px;
+		}
+
+		#hsr-timer {
+			color: #126de1;
+			font-size: 44px;
+			font-weight: bold;
+		}
+
+		#hsr-status {
+			color: #1d304c;
+			font-size: 16px;
+			font-weight: bold;
+		}
+
+		#hsr-panel {
+			background: #ffffff;
+			border: 1px solid #d5deea;
+			border-radius: 12px;
+			padding: 12px;
+		}
+
+		#hsr-section {
+			color: #12315a;
+			font-size: 16px;
+			font-weight: bold;
+		}
+
+		#hsr-label {
+			color: #263852;
+			font-size: 14px;
+			font-weight: bold;
+		}
+
+		#hsr-combo {
+			min-height: 34px;
+			border-radius: 8px;
+			border: 1px solid #b9c7d9;
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#ffffff),
+				to(#edf2f8)
+			);
+			color: #17263f;
+		}
+
+		#hsr-combo:hover {
+			border-color: #2e8bef;
+		}
+
+		#hsr-check {
+			color: #17263f;
+			font-size: 14px;
+			font-weight: bold;
+		}
+
+		#hsr-check:checked {
+			color: #096bdc;
+		}
+
+		#hsr-start {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#38a1ff),
+				color-stop(0.45, #087ff0),
+				to(#075ac8)
+			);
+			color: white;
+			border: 1px solid #0455b9;
+			border-radius: 12px;
+			font-size: 17px;
+			font-weight: bold;
+			padding: 14px 18px;
+		}
+
+		#hsr-start:hover {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#62b5ff),
+				color-stop(0.45, #168df5),
+				to(#0868da)
+			);
+		}
+
+		#hsr-pause {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#ffffff),
+				to(#dce3ec)
+			);
+			color: #394b65;
+			border: 1px solid #b6c2d0;
+			border-radius: 12px;
+			font-size: 17px;
+			font-weight: bold;
+			padding: 14px 18px;
+		}
+
+		#hsr-stop {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#ff5c57),
+				color-stop(0.45, #e93b36),
+				to(#c91f1b)
+			);
+			color: white;
+			border: 1px solid #b51d19;
+			border-radius: 12px;
+			font-size: 17px;
+			font-weight: bold;
+			padding: 14px 18px;
+		}
+
+		#hsr-stop:hover {
+			background-image: -gtk-gradient(
+				linear,
+				left top,
+				left bottom,
+				from(#ff7772),
+				color-stop(0.45, #ef4742),
+				to(#d92823)
+			);
+		}
+
+		#hsr-folder {
+			min-height: 36px;
+			border-radius: 8px;
+			border: 1px solid #b9c7d9;
+			background: #ffffff;
+		}
