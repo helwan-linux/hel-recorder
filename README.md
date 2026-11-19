@@ -579,7 +579,7 @@ https://github.com/helwan-linux
 
 Helwan Screen Recorder is an actively developed Linux desktop application.
 
-The current 1.0.0 version focuses on:
+The current 1.1.0 version focuses on:
 
 - Reliable screen recording
 - Practical audio capture
