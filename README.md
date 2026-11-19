@@ -505,20 +505,20 @@ The application combines simple recording controls with practical features for e
 ## Project Structure
 
 ```text
-hel-recorder/
-├── assets/
-│   └── icon.png
-├── features.go
-├── main.go
-├── recorder.go
-├── ui.go
-├── x11_hotkeys.go
-├── go.mod
-├── go.sum
-├── hel-recorder.desktop
-├── LICENSE
-├── PKGBUILD
-└── README.md
+📁 hel-recorder/
+├── 📁 assets
+│   └── 📄 icon.png
+├── 📄 camera.go
+├── 📄 features.go
+├── 📄 formats.go
+├── 📄 go.mod
+├── 📄 go.sum
+├── 📄 hel-recorder.desktop
+├── 📄 main.go
+├── 📄 recorder.go
+├── 📄 style.css
+├── 📄 ui.go
+└── 📄 x11_hotkeys.go
 ```
 
 ### Main Components
