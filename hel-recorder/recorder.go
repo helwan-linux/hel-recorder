@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	inputQueueSize = "128"
-	stopTimeout    = 10 * time.Second
+	stopTimeout = 10 * time.Second
 )
 
 type RecorderManager struct {
@@ -639,7 +638,6 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	args = append(
 		args,
-		"-thread_queue_size", inputQueueSize,
 		"-f", "x11grab",
 		"-framerate", fps,
 		"-video_size", res,
@@ -653,7 +651,6 @@ func (m *RecorderManager) startRecordingLocked() {
 		webcamInputIdx = nextInputIdx
 		args = append(
 			args,
-			"-thread_queue_size", inputQueueSize,
 			"-f", "v4l2",
 			"-framerate", "30",
 			"-video_size", camSize,
@@ -667,7 +664,6 @@ func (m *RecorderManager) startRecordingLocked() {
 	for _, source := range audioInputs {
 		args = append(
 			args,
-			"-thread_queue_size", inputQueueSize,
 			"-f", "pulse",
 			"-i", source,
 		)
