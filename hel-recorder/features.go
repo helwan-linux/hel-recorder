@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -14,7 +15,76 @@ import (
 var (
 	osdWindow *gtk.Window
 	osdLabel  *gtk.Label
+
+	// Last position chosen by the user; reused the next time the OSD opens.
+	osdPosSaved bool
+	osdLastX    int
+	osdLastY    int
 )
+
+// makeWindowDraggable lets the user move a borderless popup window by
+// dragging it with the left mouse button. Popup windows are not managed by the
+// window manager, so the move is done manually. onMoved is called when the
+// drag ends.
+func makeWindowDraggable(win *gtk.Window, onMoved func(x, y int)) {
+	var (
+		dragging           bool
+		startRootX         float64
+		startRootY         float64
+		startWinX          int
+		startWinY          int
+	)
+
+	win.AddEvents(int(
+		gdk.BUTTON_PRESS_MASK |
+			gdk.BUTTON_RELEASE_MASK |
+			gdk.POINTER_MOTION_MASK,
+	))
+
+	win.Connect("button-press-event", func(w *gtk.Window, ev *gdk.Event) bool {
+		btn := gdk.EventButtonNewFromEvent(ev)
+		if btn.Button() != 1 {
+			return false
+		}
+
+		dragging = true
+		startRootX, startRootY = btn.XRoot(), btn.YRoot()
+		startWinX, startWinY = w.GetPosition()
+
+		return true
+	})
+
+	win.Connect("motion-notify-event", func(w *gtk.Window, ev *gdk.Event) bool {
+		if !dragging {
+			return false
+		}
+
+		motion := gdk.EventMotionNewFromEvent(ev)
+		rootX, rootY := motion.MotionValRoot()
+
+		w.Move(
+			startWinX+int(rootX-startRootX),
+			startWinY+int(rootY-startRootY),
+		)
+
+		return true
+	})
+
+	win.Connect("button-release-event", func(w *gtk.Window, ev *gdk.Event) bool {
+		if !dragging {
+			return false
+		}
+
+		dragging = false
+
+		if onMoved != nil {
+			x, y := w.GetPosition()
+			onMoved(x, y)
+		}
+
+		return true
+	})
+}
 
 func (m *RecorderManager) showFloatingOSD() {
 	glib.IdleAdd(func() {
@@ -70,21 +140,32 @@ func (m *RecorderManager) showFloatingOSD() {
 		win.Add(box)
 		win.ShowAll()
 
-		// Move after showing so GTK has applied the requested window size.
-		if screen != nil {
-			if root, err := screen.GetRootWindow(); err == nil && root != nil {
-				width := root.WindowGetWidth()
-				x := width - 270
-				if x < 12 {
-					x = 12
+		if osdPosSaved {
+			win.Move(osdLastX, osdLastY)
+		} else {
+			// Move after showing so GTK has applied the requested window size.
+			if screen != nil {
+				if root, err := screen.GetRootWindow(); err == nil && root != nil {
+					width := root.WindowGetWidth()
+					x := width - 270
+					if x < 12 {
+						x = 12
+					}
+					win.Move(x, 18)
+				} else {
+					win.SetPosition(gtk.WIN_POS_CENTER)
 				}
-				win.Move(x, 18)
 			} else {
 				win.SetPosition(gtk.WIN_POS_CENTER)
 			}
-		} else {
-			win.SetPosition(gtk.WIN_POS_CENTER)
 		}
+
+		win.SetTooltipText("Drag to move")
+
+		makeWindowDraggable(win, func(x, y int) {
+			osdPosSaved = true
+			osdLastX, osdLastY = x, y
+		})
 
 		osdWindow = win
 	})

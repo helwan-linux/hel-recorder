@@ -1,0 +1,2 @@
+go build -o helwan-recorder . && HSR_DEBUG=1 ./helwan-recorder
+

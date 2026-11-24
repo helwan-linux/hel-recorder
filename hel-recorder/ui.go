@@ -70,19 +70,7 @@ func loadAppIconPixbuf() *gdk.Pixbuf {
 }
 
 func hasWebcamDevice() bool {
-	matches, err := filepath.Glob("/dev/video*")
-	if err != nil {
-		return false
-	}
-
-	for _, path := range matches {
-		info, err := os.Stat(path)
-		if err == nil && !info.IsDir() {
-			return true
-		}
-	}
-
-	return false
+	return findWebcamDevice() != ""
 }
 
 func loadRecorderCSS() {
@@ -735,7 +723,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	)
 
 	chkWebcam, _ := gtk.CheckButtonNewWithLabel(
-		"Webcam Overlay & Live Preview (PiP)",
+		"Webcam Overlay (PiP)",
 	)
 
 	chkWebcam.SetName("hsr-check")
@@ -864,7 +852,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	if !hasWebcamDevice() {
 		chkWebcam.SetSensitive(false)
 		chkWebcam.SetTooltipText(
-			"No webcam detected at /dev/video0",
+			"No webcam detected (/dev/video*)",
 		)
 	} else {
 		chkWebcam.Connect("toggled", func() {
@@ -1169,15 +1157,18 @@ func showHelpDialog(parent *gtk.Window) {
 		gtk.MESSAGE_INFO,
 		gtk.BUTTONS_OK,
 		"%s",
-		"Keyboard Shortcuts:\n\n"+
+		"Keyboard Shortcuts (work system-wide):\n\n"+
 			"Ctrl + R: Start recording\n"+
 			"Ctrl + E: Pause / Resume recording\n"+
 			"Ctrl + Q: Stop and save\n"+
 			"Ctrl + G: Toggle Magnifier\n\n"+
 			"Features:\n"+
 			"- Multiple video formats (MP4, MKV, WebM, GIF).\n"+
+			"- Hardware encoding (VAAPI / NVENC) when available.\n"+
 			"- Floating OSD status pill during recording.\n"+
-			"- Webcam PiP preview & Screenkey lag fixes.",
+			"- Webcam overlay (PiP) and on-screen keystrokes.\n\n"+
+			"Troubleshooting: start the app from a terminal with\n"+
+			"HSR_DEBUG=1 to see the FFmpeg command and statistics.",
 	)
 
 	dialog.SetTitle("Help - Helwan Recorder")
@@ -1205,7 +1196,7 @@ func showAboutDialog(
 		"Helwan Screen Recorder",
 	)
 
-	dialog.SetVersion("1.1.0")
+	dialog.SetVersion("1.2.0")
 
 	dialog.SetComments(
 		"Screen and audio recorder for Helwan Linux.",

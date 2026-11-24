@@ -2,10 +2,10 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,11 +23,94 @@ const (
 	stopTimeout = 10 * time.Second
 )
 
+// Set HSR_DEBUG=1 to print the exact FFmpeg command line and live statistics
+// (fps, speed, dropped frames) to the terminal. Set HSR_FORCE_CPU=1 to skip
+// hardware encoder detection.
+var debugEnabled = os.Getenv("HSR_DEBUG") != ""
+
+func debugf(format string, a ...interface{}) {
+	if debugEnabled {
+		log.Printf("[hsr] "+format, a...)
+	}
+}
+
+func ffmpegLogLevel() string {
+	if debugEnabled {
+		return "info"
+	}
+	return "warning"
+}
+
+// tailBuffer keeps only the last max bytes written to it. FFmpeg can emit
+// warnings continuously during a long recording; an unbounded buffer would
+// slowly grow in memory.
+type tailBuffer struct {
+	mu   sync.Mutex
+	max  int
+	data []byte
+}
+
+func newTailBuffer(max int) *tailBuffer {
+	return &tailBuffer{max: max}
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.data = append(t.data, p...)
+
+	if len(t.data) > t.max {
+		t.data = append([]byte(nil), t.data[len(t.data)-t.max:]...)
+	}
+
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return string(t.data)
+}
+
+// lastLine returns the last non-empty line of text.
+func lastLine(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+
+	return ""
+}
+
+// makeEvenResolution rounds both dimensions down to even numbers, which
+// yuv420p/H.264 encoders require.
+func makeEvenResolution(res string) string {
+	parts := strings.SplitN(res, "x", 2)
+	if len(parts) != 2 {
+		return res
+	}
+
+	w, err1 := strconv.Atoi(parts[0])
+	h, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return res
+	}
+
+	return fmt.Sprintf("%dx%d", w&^1, h&^1)
+}
+
 type RecorderManager struct {
 	ui *AppUI
 
-	cmd       *exec.Cmd
-	stdinPipe io.WriteCloser
+	cmd            *exec.Cmd
+	stdinPipe      io.WriteCloser
+	audioCmd       *exec.Cmd
+	audioStdinPipe io.WriteCloser
 
 	isRecording bool
 	isPaused    bool
@@ -41,13 +124,17 @@ type RecorderManager struct {
 	pausedDuration time.Duration
 	pauseStart     time.Time
 
-	stopTicker  chan struct{}
-	processDone chan struct{}
+	stopTicker       chan struct{}
+	processDone      chan struct{}
+	audioProcessDone chan struct{}
 
-	outputFile      string
-	tempPartFiles   []string
-	currentPartFile string
-	stderr          *bytes.Buffer
+	outputFile           string
+	tempPartFiles        []string
+	currentPartFile      string
+	audioPartFiles       []string
+	currentAudioPartFile string
+	stderr               *tailBuffer
+	audioStderr          *tailBuffer
 
 	countdownCancel chan struct{}
 	countdownActive bool
@@ -64,6 +151,10 @@ type RecorderManager struct {
 
 func NewRecorderManager(ui *AppUI) *RecorderManager {
 	m := &RecorderManager{ui: ui}
+
+	// Probe VAAPI/NVENC in the background so the first recording (and every
+	// resume after a pause) starts instantly.
+	go getHWEncoder()
 
 	ui.BtnStart.Connect("clicked", m.StartRecording)
 	ui.BtnPause.Connect("clicked", m.PauseResumeRecording)
@@ -249,44 +340,6 @@ func setSourceMute(source string, mute bool) {
 	).Run()
 }
 
-func detectVAAPI() string {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return ""
-	}
-
-	devices, err := filepath.Glob("/dev/dri/renderD*")
-	if err != nil {
-		return ""
-	}
-
-	for _, device := range devices {
-		if _, err := os.Stat(device); err != nil {
-			continue
-		}
-
-		args := []string{
-			"-hide_banner",
-			"-loglevel", "error",
-			"-vaapi_device", device,
-			"-f", "lavfi",
-			"-i", "color=c=black:s=128x128:d=0.1",
-			"-vf", "format=nv12,hwupload",
-			"-frames:v", "1",
-			"-c:v", "h264_vaapi",
-			"-qp", "20",
-			"-f", "null",
-			"-",
-		}
-
-		if exec.Command(ffmpeg, args...).Run() == nil {
-			return device
-		}
-	}
-
-	return ""
-}
-
 func (m *RecorderManager) selectedMicrophone() string {
 	if m.ui.ComboMic == nil {
 		return "default"
@@ -446,14 +499,22 @@ func (m *RecorderManager) resetFailedStartLocked() {
 	if m.currentPartFile != "" {
 		_ = os.Remove(m.currentPartFile)
 	}
+	if m.currentAudioPartFile != "" {
+		_ = os.Remove(m.currentAudioPartFile)
+	}
 
 	m.cmd = nil
 	m.stdinPipe = nil
+	m.audioCmd = nil
+	m.audioStdinPipe = nil
 	m.stderr = nil
+	m.audioStderr = nil
 
 	m.currentPartFile = ""
+	m.currentAudioPartFile = ""
 	m.outputFile = ""
 	m.tempPartFiles = nil
+	m.audioPartFiles = nil
 
 	m.isRecording = false
 	m.isPaused = false
@@ -525,6 +586,8 @@ func (m *RecorderManager) startRecordingLocked() {
 		}
 	}
 
+	res = makeEvenResolution(res)
+
 	validResolution, _ := regexp.MatchString(
 		`^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$`,
 		res,
@@ -585,8 +648,6 @@ func (m *RecorderManager) startRecordingLocked() {
 		webcamDevice = findWebcamDevice()
 		if webcamDevice == "" {
 			useWebcam = false
-		} else {
-			m.startWebcamPreviewLocked(camSize, camPos)
 		}
 	}
 
@@ -607,158 +668,259 @@ func (m *RecorderManager) startRecordingLocked() {
 			),
 		)
 		m.tempPartFiles = nil
+		m.audioPartFiles = nil
 	}
 
-	partExt := formatExt
-	if formatExt == "gif" {
-		// Record GIF sessions into a reliable intermediate video container.
-		// GIF is generated only after recording stops.
-		partExt = "mkv"
+	// Video and audio are deliberately written by separate FFmpeg processes.
+	// The video process never waits for PulseAudio or an audio filter/muxer.
+	videoPartFile := generatePartFileName(saveDir, internalPartExt(formatExt))
+	m.currentPartFile = videoPartFile
+
+	var audioPartFile string
+	if len(audioInputs) > 0 {
+		audioPartFile = generatePartFileName(saveDir, "mka")
+		m.currentAudioPartFile = audioPartFile
 	}
 
-	partFile := generatePartFileName(saveDir, partExt)
-	m.currentPartFile = partFile
+	hw := getHWEncoder()
+	if formatExt == "webm" {
+		hw = hwEncoder{}
+	}
 
-	args := []string{
+	// ----------------------------
+	// Video FFmpeg process
+	// ----------------------------
+	videoArgs := []string{
 		"-y",
 		"-hide_banner",
-		"-loglevel", "error",
+		"-loglevel", ffmpegLogLevel(),
 	}
 
-	vaapiDevice := ""
-	if formatExt == "mp4" && !useWebcam {
-		vaapiDevice = detectVAAPI()
+	if debugEnabled {
+		videoArgs = append(videoArgs, "-stats")
 	}
 
-	if vaapiDevice != "" {
-		args = append(args, "-vaapi_device", vaapiDevice)
-	}
+	videoArgs = append(videoArgs, hw.InitArgs()...)
 
 	grabInput := display + m.activeOffset
 
-	args = append(
-		args,
+	videoArgs = append(videoArgs, inputQueueArgs("1024")...)
+	videoArgs = append(
+		videoArgs,
 		"-f", "x11grab",
 		"-framerate", fps,
+		"-draw_mouse", "1",
 		"-video_size", res,
 		"-i", grabInput,
 	)
 
-	nextInputIdx := 1
 	webcamInputIdx := -1
-
 	if useWebcam {
-		webcamInputIdx = nextInputIdx
-		args = append(
-			args,
+		webcamInputIdx = 1
+
+		videoArgs = append(videoArgs, inputQueueArgs("512")...)
+		videoArgs = append(
+			videoArgs,
+			"-use_wallclock_as_timestamps", "1",
 			"-f", "v4l2",
+		)
+
+		if webcamSupportsMJPEG(webcamDevice) {
+			videoArgs = append(videoArgs, "-input_format", "mjpeg")
+		}
+
+		videoArgs = append(
+			videoArgs,
 			"-framerate", "30",
 			"-video_size", camSize,
 			"-i", webcamDevice,
 		)
-		nextInputIdx++
 	}
 
-	audioInputIndices := make([]int, 0, 2)
-
-	for _, source := range audioInputs {
-		args = append(
-			args,
-			"-f", "pulse",
-			"-i", source,
-		)
-
-		audioInputIndices = append(audioInputIndices, nextInputIdx)
-		nextInputIdx++
-	}
-
-	filterParts := make([]string, 0, 2)
+	videoFilter := ""
 	videoMap := "0:v:0"
+	vfInGraph := false
 
 	if useWebcam {
-		filterParts = append(
-			filterParts,
-			fmt.Sprintf(
-				"[0:v:0][%d:v:0]overlay=%s:shortest=1[vout]",
-				webcamInputIdx,
-				webcamOverlayPosition(camPos),
-			),
+		videoFilter = fmt.Sprintf(
+			"[0:v:0][%d:v:0]overlay=%s",
+			webcamInputIdx,
+			webcamOverlayPosition(camPos),
 		)
+
+		if hw.Kind == hwVAAPI {
+			videoFilter += ",format=nv12,hwupload"
+		}
+
+		videoFilter += "[vout]"
 		videoMap = "[vout]"
+		vfInGraph = true
 	}
 
-	audioMap := ""
-
-	switch len(audioInputIndices) {
-	case 1:
-		audioMap = fmt.Sprintf("%d:a:0", audioInputIndices[0])
-
-	case 2:
-		filterParts = append(
-			filterParts,
-			fmt.Sprintf(
-				"[%d:a:0][%d:a:0]amix=inputs=2:duration=longest:dropout_transition=2[aout]",
-				audioInputIndices[0],
-				audioInputIndices[1],
-			),
-		)
-		audioMap = "[aout]"
+	if videoFilter != "" {
+		videoArgs = append(videoArgs, "-filter_complex", videoFilter)
 	}
 
-	if len(filterParts) > 0 {
-		args = append(
-			args,
-			"-filter_complex",
-			strings.Join(filterParts, ";"),
-		)
-	}
-
-	args = append(args, "-map", videoMap)
-
-	if audioMap != "" {
-		args = append(args, "-map", audioMap)
-	}
-
-	args = append(
-		args,
+	videoArgs = append(videoArgs, "-map", videoMap)
+	videoArgs = append(
+		videoArgs,
 		getFormatSettings(
 			formatExt,
 			fps,
-			res,
-			vaapiDevice,
-			len(audioInputIndices) > 0 && formatExt != "gif",
+			hw,
+			false,
+			vfInGraph,
 		)...,
 	)
+	videoArgs = append(videoArgs, videoPartFile)
 
-	args = append(args, partFile)
+	debugf("video ffmpeg %s", strings.Join(videoArgs, " "))
 
-	cmd := exec.Command("ffmpeg", args...)
-	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
+	videoCmd := exec.Command("ffmpeg", videoArgs...)
+	videoStderr := newTailBuffer(16 * 1024)
 
-	stdin, err := cmd.StdinPipe()
+	if debugEnabled {
+		videoCmd.Stderr = io.MultiWriter(videoStderr, os.Stderr)
+	} else {
+		videoCmd.Stderr = videoStderr
+	}
+
+	videoStdin, err := videoCmd.StdinPipe()
 	if err != nil {
 		m.stopScreenkeyLocked()
 		m.stopWebcamPreviewLocked()
 		m.resetFailedStartLocked()
-		m.setStatus("Error: Cannot create FFmpeg input")
+		m.setStatus("Error: Cannot create video FFmpeg input")
 		m.restoreWindow()
 		return
 	}
 
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
+	if err := videoCmd.Start(); err != nil {
+		_ = videoStdin.Close()
 		m.stopScreenkeyLocked()
 		m.stopWebcamPreviewLocked()
 		m.resetFailedStartLocked()
-		m.setStatus("Error: Cannot start FFmpeg: " + err.Error())
+		m.setStatus("Error: Cannot start video FFmpeg: " + err.Error())
 		m.restoreWindow()
 		return
 	}
 
-	m.cmd = cmd
-	m.stdinPipe = stdin
-	m.stderr = stderr
+	// ----------------------------
+	// Audio FFmpeg process
+	// ----------------------------
+	var audioCmd *exec.Cmd
+	var audioStdin io.WriteCloser
+	var audioStderr *tailBuffer
+
+	if len(audioInputs) > 0 {
+		audioArgs := []string{
+			"-y",
+			"-hide_banner",
+			"-loglevel", ffmpegLogLevel(),
+		}
+
+		if debugEnabled {
+			audioArgs = append(audioArgs, "-stats")
+		}
+
+		audioInputIndices := make([]int, 0, len(audioInputs))
+
+		for i, source := range audioInputs {
+			audioArgs = append(audioArgs, inputQueueArgs("1024")...)
+			audioArgs = append(
+				audioArgs,
+				"-use_wallclock_as_timestamps", "1",
+				"-f", "pulse",
+				"-i", source,
+			)
+			audioInputIndices = append(audioInputIndices, i)
+		}
+
+		audioFilter := ""
+		audioMap := "0:a:0"
+
+		switch len(audioInputIndices) {
+		case 1:
+			audioFilter = "[0:a:0]aresample=async=1000[aout]"
+			audioMap = "[aout]"
+		case 2:
+			audioFilter = fmt.Sprintf(
+				"[%d:a:0][%d:a:0]amix=inputs=2:duration=longest:dropout_transition=2,"+
+					"volume=2,alimiter=limit=0.95,aresample=async=1000[aout]",
+				audioInputIndices[0],
+				audioInputIndices[1],
+			)
+			audioMap = "[aout]"
+		}
+
+		if audioFilter != "" {
+			audioArgs = append(audioArgs, "-filter_complex", audioFilter)
+		}
+
+		audioArgs = append(audioArgs, "-map", audioMap)
+
+		if formatExt == "webm" {
+			audioArgs = append(
+				audioArgs,
+				"-c:a", "libopus",
+				"-b:a", "192k",
+				"-f", "webm",
+			)
+		} else {
+			audioArgs = append(
+				audioArgs,
+				"-c:a", "aac",
+				"-b:a", "192k",
+				"-f", "matroska",
+			)
+		}
+
+		audioArgs = append(audioArgs, audioPartFile)
+
+		debugf("audio ffmpeg %s", strings.Join(audioArgs, " "))
+
+		audioCmd = exec.Command("ffmpeg", audioArgs...)
+		audioStderr = newTailBuffer(16 * 1024)
+
+		if debugEnabled {
+			audioCmd.Stderr = io.MultiWriter(audioStderr, os.Stderr)
+		} else {
+			audioCmd.Stderr = audioStderr
+		}
+
+		audioStdin, err = audioCmd.StdinPipe()
+		if err != nil {
+			_ = videoStdin.Close()
+			_ = videoCmd.Process.Kill()
+			_ = videoCmd.Wait()
+			m.stopScreenkeyLocked()
+			m.stopWebcamPreviewLocked()
+			m.resetFailedStartLocked()
+			m.setStatus("Error: Cannot create audio FFmpeg input")
+			m.restoreWindow()
+			return
+		}
+
+		if err := audioCmd.Start(); err != nil {
+			_ = audioStdin.Close()
+			_ = videoStdin.Close()
+			_ = videoCmd.Process.Kill()
+			_ = videoCmd.Wait()
+			m.stopScreenkeyLocked()
+			m.stopWebcamPreviewLocked()
+			m.resetFailedStartLocked()
+			m.setStatus("Error: Cannot start audio FFmpeg: " + err.Error())
+			m.restoreWindow()
+			return
+		}
+	}
+
+	m.cmd = videoCmd
+	m.stdinPipe = videoStdin
+	m.stderr = videoStderr
+	m.audioCmd = audioCmd
+	m.audioStdinPipe = audioStdin
+	m.audioStderr = audioStderr
 
 	m.isRecording = true
 	m.isPaused = false
@@ -772,16 +934,20 @@ func (m *RecorderManager) startRecordingLocked() {
 
 	m.stopTicker = make(chan struct{})
 	m.processDone = make(chan struct{})
+	if audioCmd != nil {
+		m.audioProcessDone = make(chan struct{})
+	} else {
+		m.audioProcessDone = nil
+	}
 
 	ticker := m.stopTicker
-	mode := "CPU"
-
-	if vaapiDevice != "" {
-		mode = "VAAPI"
-	}
+	mode := hw.Label()
 
 	if useWebcam {
 		mode += " + Webcam PiP"
+	}
+	if audioCmd != nil {
+		mode += " + Separate Audio"
 	}
 
 	m.updateWindowState("recording")
@@ -797,7 +963,10 @@ func (m *RecorderManager) startRecordingLocked() {
 	})
 
 	go m.runTimer(ticker)
-	go m.watchProcess(cmd, stderr)
+	go m.watchProcess(videoCmd, videoStderr)
+	if audioCmd != nil {
+		go m.watchAudioProcess(audioCmd, audioStderr)
+	}
 }
 
 func (m *RecorderManager) restoreWindow() {
@@ -849,19 +1018,15 @@ func (m *RecorderManager) setControlsSensitive(
 
 func (m *RecorderManager) watchProcess(
 	cmd *exec.Cmd,
-	stderr *bytes.Buffer,
+	stderr *tailBuffer,
 ) {
 	waitErr := cmd.Wait()
-
-	stderrText := strings.TrimSpace(
-		stderr.String(),
-	)
+	stderrText := lastLine(stderr.String())
 
 	m.mu.Lock()
 
 	stopping := m.stopping
 	isPaused := m.isPaused
-
 	currentPart := m.currentPartFile
 	ticker := m.stopTicker
 	done := m.processDone
@@ -879,13 +1044,10 @@ func (m *RecorderManager) watchProcess(
 	}
 
 	if currentPart != "" {
-		if info, err := os.Stat(currentPart); err == nil &&
-			info.Size() > 0 {
-
+		if info, err := os.Stat(currentPart); err == nil && info.Size() > 0 {
 			m.mu.Lock()
 
 			alreadyAdded := false
-
 			for _, p := range m.tempPartFiles {
 				if p == currentPart {
 					alreadyAdded = true
@@ -894,10 +1056,7 @@ func (m *RecorderManager) watchProcess(
 			}
 
 			if !alreadyAdded {
-				m.tempPartFiles = append(
-					m.tempPartFiles,
-					currentPart,
-				)
+				m.tempPartFiles = append(m.tempPartFiles, currentPart)
 			}
 
 			if m.currentPartFile == currentPart {
@@ -909,7 +1068,6 @@ func (m *RecorderManager) watchProcess(
 	}
 
 	if stopping {
-		// StopRecording owns finalization and waits for this process.
 		if done != nil {
 			close(done)
 		}
@@ -917,13 +1075,19 @@ func (m *RecorderManager) watchProcess(
 	}
 
 	if isPaused {
-		glib.IdleAdd(func() {
-			m.ui.BtnPause.SetSensitive(true)
-			m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
-			m.ui.LblStatus.SetText("Status: Paused")
-		})
+		m.mu.Lock()
+		audioStillRunning := m.audioCmd != nil
+		m.mu.Unlock()
 
-		m.updateWindowState("paused")
+		if !audioStillRunning {
+			glib.IdleAdd(func() {
+				m.ui.BtnPause.SetSensitive(true)
+				m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
+				m.ui.LblStatus.SetText("Status: Paused")
+			})
+
+			m.updateWindowState("paused")
+		}
 
 		if done != nil {
 			close(done)
@@ -933,17 +1097,24 @@ func (m *RecorderManager) watchProcess(
 	}
 
 	if waitErr != nil {
+		// If video dies unexpectedly, stop the independent audio process too.
 		m.mu.Lock()
-
-		m.stopScreenkeyLocked()
-		m.stopWebcamPreviewLocked()
-
+		audioCmd := m.audioCmd
+		audioStdin := m.audioStdinPipe
 		m.isRecording = false
 		m.isPaused = false
 		m.stopping = false
-
 		m.mu.Unlock()
 
+		if audioStdin != nil {
+			_, _ = audioStdin.Write([]byte("q\n"))
+			_ = audioStdin.Close()
+		} else if audioCmd != nil && audioCmd.Process != nil {
+			_ = audioCmd.Process.Kill()
+		}
+
+		m.stopScreenkeyLocked()
+		m.stopWebcamPreviewLocked()
 		hideFloatingOSD()
 		m.updateWindowState("ready")
 		m.restoreWindow()
@@ -952,16 +1123,98 @@ func (m *RecorderManager) watchProcess(
 			m.ui.BtnStart.SetSensitive(true)
 			m.ui.BtnPause.SetSensitive(false)
 			m.ui.BtnStop.SetSensitive(false)
-
 			m.setControlsSensitive(true)
 
 			if stderrText == "" {
-				stderrText = "FFmpeg exited unexpectedly"
+				stderrText = "FFmpeg video process exited unexpectedly"
 			}
 
 			m.ui.LblStatus.SetText(
-				"Error: Recording interrupted: " +
-					stderrText,
+				"Error: Recording interrupted: " + stderrText,
+			)
+		})
+	}
+
+	if done != nil {
+		close(done)
+	}
+}
+
+func (m *RecorderManager) watchAudioProcess(
+	cmd *exec.Cmd,
+	stderr *tailBuffer,
+) {
+	waitErr := cmd.Wait()
+	stderrText := lastLine(stderr.String())
+
+	m.mu.Lock()
+
+	stopping := m.stopping
+	isPaused := m.isPaused
+	currentPart := m.currentAudioPartFile
+	done := m.audioProcessDone
+
+	if m.audioCmd == cmd {
+		m.audioCmd = nil
+		m.audioStdinPipe = nil
+	}
+
+	m.mu.Unlock()
+
+	if currentPart != "" {
+		if info, err := os.Stat(currentPart); err == nil && info.Size() > 0 {
+			m.mu.Lock()
+
+			alreadyAdded := false
+			for _, p := range m.audioPartFiles {
+				if p == currentPart {
+					alreadyAdded = true
+					break
+				}
+			}
+
+			if !alreadyAdded {
+				m.audioPartFiles = append(m.audioPartFiles, currentPart)
+			}
+
+			if m.currentAudioPartFile == currentPart {
+				m.currentAudioPartFile = ""
+			}
+
+			m.mu.Unlock()
+		}
+	}
+
+	if stopping || isPaused {
+		if isPaused && !stopping {
+			m.mu.Lock()
+			videoStillRunning := m.cmd != nil
+			m.mu.Unlock()
+
+			if !videoStillRunning {
+				glib.IdleAdd(func() {
+					m.ui.BtnPause.SetSensitive(true)
+					m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
+					m.ui.LblStatus.SetText("Status: Paused")
+				})
+				m.updateWindowState("paused")
+			}
+		}
+
+		if done != nil {
+			close(done)
+		}
+		return
+	}
+
+	if waitErr != nil {
+		// Audio is independent: a failure here must not stall the screen.
+		glib.IdleAdd(func() {
+			if stderrText == "" {
+				stderrText = "FFmpeg audio process exited unexpectedly"
+			}
+			m.ui.LblStatus.SetText(
+				"Warning: Audio recording stopped: " + stderrText,
 			)
 		})
 	}
@@ -1025,19 +1278,13 @@ func moveFile(src, dst string) error {
 func (m *RecorderManager) finalizeRecording() {
 	m.mu.Lock()
 
-	parts := append(
-		[]string(nil),
-		m.tempPartFiles...,
-	)
-
+	videoParts := append([]string(nil), m.tempPartFiles...)
+	audioParts := append([]string(nil), m.audioPartFiles...)
 	outputFile := m.outputFile
-
-	suppressNotification :=
-		m.suppressNotifications
+	suppressNotification := m.suppressNotifications
 
 	m.stopScreenkeyLocked()
 	m.stopWebcamPreviewLocked()
-
 	hideFloatingOSD()
 
 	m.isRecording = false
@@ -1047,6 +1294,8 @@ func (m *RecorderManager) finalizeRecording() {
 	m.outputFile = ""
 	m.tempPartFiles = nil
 	m.currentPartFile = ""
+	m.audioPartFiles = nil
+	m.currentAudioPartFile = ""
 
 	m.activeRes = ""
 	m.activeOffset = ""
@@ -1057,109 +1306,115 @@ func (m *RecorderManager) finalizeRecording() {
 
 	m.cmd = nil
 	m.stdinPipe = nil
+	m.audioCmd = nil
+	m.audioStdinPipe = nil
 	m.stderr = nil
+	m.audioStderr = nil
 
 	m.mu.Unlock()
 
 	m.updateWindowState("ready")
 	m.restoreWindow()
 
-	if len(parts) == 0 {
+	if len(videoParts) == 0 {
 		glib.IdleAdd(func() {
 			m.ui.BtnStart.SetSensitive(true)
 			m.ui.BtnPause.SetSensitive(false)
 			m.ui.BtnStop.SetSensitive(false)
-
 			m.setControlsSensitive(true)
-
-			m.ui.LblStatus.SetText(
-				"Error: No recorded video parts found",
-			)
+			m.ui.LblStatus.SetText("Error: No recorded video parts found")
 		})
-
 		return
 	}
 
-	if len(parts) == 1 {
-		err := moveFile(parts[0], outputFile)
+	m.setStatus("Status: Finalizing video and audio...")
 
-		if err == nil {
-			err = verifyOutput(outputFile)
+	var err error
+
+	if strings.EqualFold(filepath.Ext(outputFile), ".gif") {
+		if len(videoParts) == 1 {
+			err = finalizeSinglePart(videoParts[0], outputFile)
+		} else {
+			err = mergeRecordingParts(videoParts, outputFile)
 		}
+	} else {
+		videoSource := videoParts[0]
+		var tempVideo string
 
-		success := err == nil
-
-		if !success {
-			_ = os.Remove(outputFile)
-			_ = os.Remove(parts[0])
-		}
-
-		glib.IdleAdd(func() {
-			m.ui.BtnStart.SetSensitive(true)
-			m.ui.BtnPause.SetSensitive(false)
-			m.ui.BtnPause.SetLabel("Pause (Ctrl+E)")
-			m.ui.BtnStop.SetSensitive(false)
-
-			m.setControlsSensitive(true)
-
-			m.ui.LblTimer.SetMarkup(
-				"<span font='28' weight='bold' color='#3584e4'>00:00:00</span>",
-			)
-
-			if success {
-				m.ui.LblStatus.SetText(
-					"Status: Video saved successfully!",
-				)
-
-				if !suppressNotification {
-					showRecordingResult(
-						m.ui.Window,
-						"success",
-						outputFile,
-						"",
-					)
-				}
+		if len(videoParts) > 1 {
+			tempFile, createErr := os.CreateTemp(filepath.Dir(outputFile), ".hel_video_merge_*.mkv")
+			if createErr != nil {
+				err = createErr
 			} else {
-				message := "Output file could not be saved"
-
-				if err != nil {
-					message = err.Error()
-				}
-
-				m.ui.LblStatus.SetText(
-					"Error: " + message,
-				)
-
-				if !suppressNotification {
-					showRecordingResult(
-						m.ui.Window,
-						"error",
-						outputFile,
-						message,
-					)
+				tempVideo = tempFile.Name()
+				_ = tempFile.Close()
+				err = mergeVideoPartsToFile(videoParts, tempVideo)
+				if err == nil {
+					videoSource = tempVideo
 				}
 			}
-		})
+		}
 
-		return
+		if err == nil && len(audioParts) > 0 {
+			audioSource := audioParts[0]
+			var tempAudio string
+
+			if len(audioParts) > 1 {
+				tempFile, createErr := os.CreateTemp(filepath.Dir(outputFile), ".hel_audio_merge_*.mka")
+				if createErr != nil {
+					err = createErr
+				} else {
+					tempAudio = tempFile.Name()
+					_ = tempFile.Close()
+					err = mergeAudioPartsToFile(audioParts, tempAudio)
+					if err == nil {
+						audioSource = tempAudio
+					}
+				}
+			}
+
+			if err == nil {
+				err = muxVideoAudio(videoSource, audioSource, outputFile)
+			}
+
+			if tempAudio != "" {
+				_ = os.Remove(tempAudio)
+			}
+		} else if err == nil {
+			err = finalizeSinglePart(videoSource, outputFile)
+		}
+
+		if tempVideo != "" {
+			_ = os.Remove(tempVideo)
+		}
 	}
 
-	m.setStatus("Status: Merging recorded parts...")
-
-	mergeErr := mergeRecordingParts(parts, outputFile)
-
-	for _, p := range parts {
-		_ = os.Remove(p)
+	if err == nil {
+		err = verifyOutput(outputFile)
 	}
 
-	if mergeErr == nil {
-		mergeErr = verifyOutput(outputFile)
-	}
+	success := err == nil
 
-	success := mergeErr == nil
-
-	if !success {
+	if success {
+		for _, p := range videoParts {
+			_ = os.Remove(p)
+		}
+		for _, p := range audioParts {
+			_ = os.Remove(p)
+		}
+	} else {
 		_ = os.Remove(outputFile)
+
+		kept := append([]string(nil), videoParts...)
+		kept = append(kept, audioParts...)
+
+		if len(kept) > 0 {
+			err = fmt.Errorf(
+				"%w\nThe raw recording parts were kept in:\n%s",
+				err,
+				filepath.Dir(kept[0]),
+			)
+		}
 	}
 
 	glib.IdleAdd(func() {
@@ -1167,7 +1422,6 @@ func (m *RecorderManager) finalizeRecording() {
 		m.ui.BtnPause.SetSensitive(false)
 		m.ui.BtnPause.SetLabel("Pause (Ctrl+E)")
 		m.ui.BtnStop.SetSensitive(false)
-
 		m.setControlsSensitive(true)
 
 		m.ui.LblTimer.SetMarkup(
@@ -1185,16 +1439,15 @@ func (m *RecorderManager) finalizeRecording() {
 					"",
 				)
 			}
-
 			return
 		}
 
-		message := "Merge failed"
-		if mergeErr != nil {
-			message = mergeErr.Error()
+		message := "Video could not be saved"
+		if err != nil {
+			message = err.Error()
 		}
 
-		m.ui.LblStatus.SetText("Error: Video could not be saved")
+		m.ui.LblStatus.SetText("Error: " + message)
 
 		if !suppressNotification {
 			showRecordingResult(
@@ -1212,47 +1465,31 @@ func (m *RecorderManager) pauseRecordingLocked() {
 		return
 	}
 
-	if m.ui.ChkAudio != nil &&
-		m.ui.ChkAudio.GetActive() {
-
-		setSourceMute(
-			m.selectedMicrophone(),
-			true,
-		)
-	}
-
-	if m.ui.ChkSystemAudio != nil &&
-		m.ui.ChkSystemAudio.GetActive() {
-
-		sysSource := m.selectedSystemAudio()
-
-		if sysSource != "" {
-			setSourceMute(
-				sysSource,
-				true,
-			)
-		}
-	}
-
 	m.isPaused = true
 	m.pauseStart = time.Now()
 
 	_, _ = m.stdinPipe.Write([]byte("q\n"))
 	_ = m.stdinPipe.Close()
 
+	if m.audioStdinPipe != nil {
+		_, _ = m.audioStdinPipe.Write([]byte("q\n"))
+		_ = m.audioStdinPipe.Close()
+	}
+
 	m.updateWindowState("paused")
 
 	glib.IdleAdd(func() {
 		m.ui.BtnPause.SetSensitive(false)
 		m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
-		m.ui.LblStatus.SetText(
-			"Status: Pausing...",
-		)
+		m.ui.LblStatus.SetText("Status: Pausing...")
 	})
 }
 
+// resumeRecordingLocked starts a new recording part. It is always called from
+// the GTK main thread (button or hotkey handler), which is required because
+// startRecordingLocked reads GTK widgets; GTK is not thread-safe.
 func (m *RecorderManager) resumeRecordingLocked() {
-	if m.cmd != nil {
+	if m.cmd != nil || m.audioCmd != nil {
 		return
 	}
 
@@ -1266,28 +1503,6 @@ func (m *RecorderManager) resumeRecordingLocked() {
 		m.pauseStart = time.Time{}
 	}
 
-	if m.ui.ChkAudio != nil &&
-		m.ui.ChkAudio.GetActive() {
-
-		setSourceMute(
-			m.selectedMicrophone(),
-			false,
-		)
-	}
-
-	if m.ui.ChkSystemAudio != nil &&
-		m.ui.ChkSystemAudio.GetActive() {
-
-		sysSource := m.selectedSystemAudio()
-
-		if sysSource != "" {
-			setSourceMute(
-				sysSource,
-				false,
-			)
-		}
-	}
-
 	glib.IdleAdd(func() {
 		m.ui.BtnPause.SetSensitive(false)
 		m.ui.BtnPause.SetLabel("Pause (Ctrl+E)")
@@ -1296,19 +1511,19 @@ func (m *RecorderManager) resumeRecordingLocked() {
 		)
 	})
 
-	go func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	m.startRecordingLocked()
 
-		if m.stopping ||
-			!m.isRecording ||
-			m.cmd != nil {
+	if m.cmd == nil {
+		// The new part could not be started: go back to the paused state so
+		// the user can retry or stop and save what was already recorded.
+		m.isPaused = true
+		m.pauseStart = time.Now()
 
-			return
-		}
-
-		m.startRecordingLocked()
-	}()
+		glib.IdleAdd(func() {
+			m.ui.BtnPause.SetSensitive(true)
+			m.ui.BtnPause.SetLabel("Resume (Ctrl+E)")
+		})
+	}
 }
 
 func (m *RecorderManager) StopRecording() {
@@ -1335,30 +1550,53 @@ func (m *RecorderManager) StopRecording() {
 	m.stopDone = make(chan struct{})
 	m.isPaused = false
 
-	cmd := m.cmd
-	stdin := m.stdinPipe
-	processDone := m.processDone
+	videoCmd := m.cmd
+	videoStdin := m.stdinPipe
+	videoDone := m.processDone
+
+	audioCmd := m.audioCmd
+	audioStdin := m.audioStdinPipe
+	audioDone := m.audioProcessDone
+
 	done := m.stopDone
 	m.mu.Unlock()
 
 	m.setStatus("Status: Stopping and saving...")
 
-	if stdin != nil {
-		_, _ = stdin.Write([]byte("q\n"))
-		_ = stdin.Close()
-	} else if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Signal(syscall.SIGINT)
+	if videoStdin != nil {
+		_, _ = videoStdin.Write([]byte("q\n"))
+		_ = videoStdin.Close()
+	} else if videoCmd != nil && videoCmd.Process != nil {
+		_ = videoCmd.Process.Signal(syscall.SIGINT)
+	}
+
+	if audioStdin != nil {
+		_, _ = audioStdin.Write([]byte("q\n"))
+		_ = audioStdin.Close()
+	} else if audioCmd != nil && audioCmd.Process != nil {
+		_ = audioCmd.Process.Signal(syscall.SIGINT)
 	}
 
 	go func() {
-		if processDone != nil {
+		if videoDone != nil {
 			select {
-			case <-processDone:
+			case <-videoDone:
 			case <-time.After(stopTimeout):
-				if cmd != nil && cmd.Process != nil {
-					_ = cmd.Process.Kill()
+				if videoCmd != nil && videoCmd.Process != nil {
+					_ = videoCmd.Process.Kill()
 				}
-				<-processDone
+				<-videoDone
+			}
+		}
+
+		if audioDone != nil {
+			select {
+			case <-audioDone:
+			case <-time.After(stopTimeout):
+				if audioCmd != nil && audioCmd.Process != nil {
+					_ = audioCmd.Process.Kill()
+				}
+				<-audioDone
 			}
 		}
 
@@ -1400,6 +1638,50 @@ func (m *RecorderManager) WaitForStop() {
 	m.stopWebcamPreviewLocked()
 	m.mu.Unlock()
 	hideFloatingOSD()
+}
+
+func mergeAudioPartsToFile(parts []string, outputFile string) error {
+	listName, err := writeConcatList(parts)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(listName)
+
+	return runFFmpeg([]string{
+		"-y",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listName,
+		"-c", "copy",
+		"-f", "matroska",
+		outputFile,
+	})
+}
+
+func muxVideoAudio(videoFile, audioFile, outputFile string) error {
+	args := []string{
+		"-y",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-i", videoFile,
+		"-i", audioFile,
+		"-map", "0:v:0",
+		"-map", "1:a:0",
+		"-c", "copy",
+	}
+
+	switch strings.ToLower(filepath.Ext(outputFile)) {
+	case ".mp4":
+		args = append(args, "-movflags", "+faststart", "-f", "mp4")
+	case ".webm":
+		args = append(args, "-f", "webm")
+	default:
+		args = append(args, "-f", "matroska")
+	}
+
+	return runFFmpeg(append(args, outputFile))
 }
 
 func (m *RecorderManager) runTimer(
