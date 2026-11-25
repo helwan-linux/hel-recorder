@@ -1352,7 +1352,7 @@ func showAboutDialog(
 		"Helwan Screen Recorder",
 	)
 
-	dialog.SetVersion("1.2.0")
+	dialog.SetVersion("1.2.0-2")
 
 	dialog.SetComments(
 		"Screen and audio recorder for Helwan Linux.",
