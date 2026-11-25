@@ -23,6 +23,10 @@ type AppUI struct {
 	ComboRes         *gtk.ComboBoxText
 	ComboCountdown   *gtk.ComboBoxText
 	ComboFormat      *gtk.ComboBoxText
+	ComboQuality     *gtk.ComboBoxText
+	ComboBitrate     *gtk.ComboBoxText
+	ComboAutoStop    *gtk.ComboBoxText
+	ComboDiskGuard   *gtk.ComboBoxText
 	ChkMinimize      *gtk.CheckButton
 	ChkScreenkey     *gtk.CheckButton
 	ChkWebcam        *gtk.CheckButton
@@ -373,6 +377,8 @@ func InitUI() (*AppUI, *gtk.Window) {
 	comboRes, _ := gtk.ComboBoxTextNew()
 	comboRes.Append("auto", "Full Screen (Native)")
 	comboRes.Append("area", "Select Area (slop)")
+	comboRes.Append("window", "Select Window (slop)")
+	appendMonitorChoices(comboRes)
 	comboRes.SetActiveID("auto")
 	comboRes.SetName("hsr-combo")
 	comboRes.SetSizeRequest(250, 36)
@@ -461,6 +467,140 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	mainBox.PackStart(
 		videoPanel,
+		false,
+		false,
+		0,
+	)
+
+	/* =========================
+	   ADVANCED: QUALITY + AUTO-STOP
+	========================= */
+
+	advancedPanel, _ := gtk.BoxNew(
+		gtk.ORIENTATION_VERTICAL,
+		8,
+	)
+
+	advancedPanel.SetName("hsr-panel")
+
+	advancedExpander, _ := gtk.ExpanderNew(
+		"Advanced: quality, bitrate and auto-stop",
+	)
+
+	advancedExpander.SetName("hsr-section")
+
+	advancedGrid, _ := gtk.GridNew()
+
+	advancedGrid.SetRowSpacing(10)
+	advancedGrid.SetColumnSpacing(14)
+	advancedGrid.SetMarginTop(10)
+
+	/* QUALITY */
+
+	lblQuality := makeIconLabel(
+		"preferences-system",
+		"Quality:",
+	)
+
+	comboQuality, _ := gtk.ComboBoxTextNew()
+	comboQuality.Append("high", "High (larger files)")
+	comboQuality.Append("standard", "Standard (recommended)")
+	comboQuality.Append("small", "Small files (lower quality)")
+	comboQuality.SetActiveID("standard")
+	comboQuality.SetName("hsr-combo")
+	comboQuality.SetSizeRequest(250, 36)
+
+	advancedGrid.Attach(lblQuality, 0, 0, 1, 1)
+	advancedGrid.Attach(comboQuality, 1, 0, 1, 1)
+
+	/* BITRATE */
+
+	lblBitrate := makeIconLabel(
+		"utilities-system-monitor",
+		"Bitrate:",
+	)
+
+	comboBitrate, _ := gtk.ComboBoxTextNew()
+	comboBitrate.Append("0", "Auto (by quality)")
+	comboBitrate.Append("2000", "2 Mbps (low)")
+	comboBitrate.Append("4000", "4 Mbps (medium)")
+	comboBitrate.Append("8000", "8 Mbps (high)")
+	comboBitrate.Append("12000", "12 Mbps (very high)")
+	comboBitrate.Append("20000", "20 Mbps (maximum)")
+	comboBitrate.SetActiveID("0")
+	comboBitrate.SetName("hsr-combo")
+	comboBitrate.SetSizeRequest(250, 36)
+	comboBitrate.SetTooltipText(
+		"A fixed bitrate overrides the quality level",
+	)
+
+	// The quality level has no effect while a fixed bitrate is chosen.
+	comboBitrate.Connect("changed", func() {
+		comboQuality.SetSensitive(
+			comboBitrate.GetActiveID() == "0",
+		)
+	})
+
+	advancedGrid.Attach(lblBitrate, 2, 0, 1, 1)
+	advancedGrid.Attach(comboBitrate, 3, 0, 1, 1)
+
+	/* AUTO-STOP: TIME */
+
+	lblStopAfter := makeIconLabel(
+		"alarm",
+		"Stop After:",
+	)
+
+	comboAutoStop, _ := gtk.ComboBoxTextNew()
+	comboAutoStop.Append("0", "No limit")
+	comboAutoStop.Append("5", "5 minutes")
+	comboAutoStop.Append("10", "10 minutes")
+	comboAutoStop.Append("15", "15 minutes")
+	comboAutoStop.Append("30", "30 minutes")
+	comboAutoStop.Append("60", "1 hour")
+	comboAutoStop.Append("120", "2 hours")
+	comboAutoStop.SetActiveID("0")
+	comboAutoStop.SetName("hsr-combo")
+	comboAutoStop.SetSizeRequest(250, 36)
+
+	advancedGrid.Attach(lblStopAfter, 0, 1, 1, 1)
+	advancedGrid.Attach(comboAutoStop, 1, 1, 1, 1)
+
+	/* AUTO-STOP: DISK SPACE */
+
+	lblDiskGuard := makeIconLabel(
+		"drive-harddisk",
+		"Low Disk Guard:",
+	)
+
+	comboDiskGuard, _ := gtk.ComboBoxTextNew()
+	comboDiskGuard.Append("0", "Off")
+	comboDiskGuard.Append("500", "Keep 500 MB free")
+	comboDiskGuard.Append("1024", "Keep 1 GB free")
+	comboDiskGuard.Append("2048", "Keep 2 GB free")
+	comboDiskGuard.Append("5120", "Keep 5 GB free")
+	comboDiskGuard.SetActiveID("1024")
+	comboDiskGuard.SetName("hsr-combo")
+	comboDiskGuard.SetSizeRequest(250, 36)
+	comboDiskGuard.SetTooltipText(
+		"Stops and saves the recording while there is still enough free " +
+			"space to finish saving it",
+	)
+
+	advancedGrid.Attach(lblDiskGuard, 2, 1, 1, 1)
+	advancedGrid.Attach(comboDiskGuard, 3, 1, 1, 1)
+
+	advancedExpander.Add(advancedGrid)
+
+	advancedPanel.PackStart(
+		advancedExpander,
+		false,
+		false,
+		0,
+	)
+
+	mainBox.PackStart(
+		advancedPanel,
 		false,
 		false,
 		0,
@@ -1041,6 +1181,10 @@ func InitUI() (*AppUI, *gtk.Window) {
 		ComboRes:         comboRes,
 		ComboCountdown:   comboCountdown,
 		ComboFormat:      comboFormat,
+		ComboQuality:     comboQuality,
+		ComboBitrate:     comboBitrate,
+		ComboAutoStop:    comboAutoStop,
+		ComboDiskGuard:   comboDiskGuard,
 		ChkMinimize:      chkMinimize,
 		ChkScreenkey:     chkScreenkey,
 		ChkWebcam:        chkWebcam,
@@ -1051,6 +1195,10 @@ func InitUI() (*AppUI, *gtk.Window) {
 		BtnAbout:         btnAbout,
 		AppIconPixbuf:    iconPixbuf,
 	}
+
+	// Restore the saved options first, then start saving future changes.
+	applySettings(ui)
+	connectSettingsSaving(ui)
 
 	return ui, win
 }
@@ -1109,6 +1257,12 @@ func showRecordingResult(
 	message := "Video saved successfully.\n\nLocation:\n" +
 		outputFile
 
+	// Extra information for a successful save, for example why the recording
+	// was stopped automatically. Other results build their own message below.
+	if details != "" {
+		message = details + "\n\n" + message
+	}
+
 	switch result {
 
 	case "warning":
@@ -1166,7 +1320,9 @@ func showHelpDialog(parent *gtk.Window) {
 			"- Multiple video formats (MP4, MKV, WebM, GIF).\n"+
 			"- Hardware encoding (VAAPI / NVENC) when available.\n"+
 			"- Floating OSD status pill during recording.\n"+
-			"- Webcam overlay (PiP) and on-screen keystrokes.\n\n"+
+			"- Webcam overlay (PiP) and on-screen keystrokes.\n"+
+			"- Quality / bitrate options, auto-stop by time or low disk space.\n"+
+			"- Monitor selection and a system tray icon with controls.\n\n"+
 			"Troubleshooting: start the app from a terminal with\n"+
 			"HSR_DEBUG=1 to see the FFmpeg command and statistics.",
 	)

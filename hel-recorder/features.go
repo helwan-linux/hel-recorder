@@ -28,11 +28,11 @@ var (
 // drag ends.
 func makeWindowDraggable(win *gtk.Window, onMoved func(x, y int)) {
 	var (
-		dragging           bool
-		startRootX         float64
-		startRootY         float64
-		startWinX          int
-		startWinY          int
+		dragging   bool
+		startRootX float64
+		startRootY float64
+		startWinX  int
+		startWinY  int
 	)
 
 	win.AddEvents(int(
@@ -173,6 +173,8 @@ func (m *RecorderManager) showFloatingOSD() {
 
 func updateFloatingOSDText(timeStr string, isPaused bool) {
 	glib.IdleAdd(func() {
+		updateTrayTooltip(timeStr, isPaused)
+
 		if osdLabel == nil {
 			return
 		}
@@ -197,6 +199,8 @@ func updateFloatingOSDText(timeStr string, isPaused bool) {
 
 func hideFloatingOSD() {
 	glib.IdleAdd(func() {
+		trayApplyState("ready")
+
 		if osdWindow != nil {
 			osdWindow.Destroy()
 			osdWindow = nil
@@ -489,3 +493,4 @@ func (m *RecorderManager) stopScreenkeyLocked() {
 		}
 	}
 }
+

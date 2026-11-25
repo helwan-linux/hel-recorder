@@ -147,6 +147,12 @@ type RecorderManager struct {
 	activeOffset string
 
 	suppressNotifications bool
+
+	// Auto-stop settings, captured whenever a recording part starts.
+	recordDir      string
+	autoStopAfter  time.Duration
+	minFreeBytes   uint64
+	autoStopReason string
 }
 
 func NewRecorderManager(ui *AppUI) *RecorderManager {
@@ -173,6 +179,8 @@ func (m *RecorderManager) updateWindowState(state string) {
 		default:
 			m.ui.Window.SetTitle("Helwan Screen Recorder")
 		}
+
+		trayApplyState(state)
 	})
 }
 
@@ -242,6 +250,74 @@ func selectAreaWithSlop() (string, string, error) {
 	}
 
 	return fmt.Sprintf("%dx%d", w, h), "+" + parts[1], nil
+}
+
+// selectWindowWithSlop lets the user click a window and returns its geometry
+// as (resolution, offset) in the same format as selectAreaWithSlop. The very
+// large tolerance makes slop treat every click as "select the window under the
+// cursor". The rectangle is clamped to the desktop so x11grab never receives a
+// negative offset or an area that exceeds the screen.
+func selectWindowWithSlop() (string, string, error) {
+	slopPath, err := exec.LookPath("slop")
+	if err != nil {
+		return "", "", fmt.Errorf("'slop' is not installed (install with: sudo pacman -S slop)")
+	}
+
+	out, err := exec.Command(slopPath, "-t", "100000", "-f", "%x %y %w %h").Output()
+	if err != nil {
+		return "", "", fmt.Errorf("window selection cancelled")
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) != 4 {
+		return "", "", fmt.Errorf("invalid window geometry from slop")
+	}
+
+	values := make([]int, 4)
+	for i, field := range fields {
+		n, convErr := strconv.Atoi(field)
+		if convErr != nil {
+			return "", "", fmt.Errorf("invalid window geometry from slop")
+		}
+		values[i] = n
+	}
+
+	x, y, w, h := values[0], values[1], values[2], values[3]
+
+	if x < 0 {
+		w += x
+		x = 0
+	}
+	if y < 0 {
+		h += y
+		y = 0
+	}
+
+	if native, nativeErr := getNativeResolution(); nativeErr == nil {
+		dims := strings.SplitN(native, "x", 2)
+		if len(dims) == 2 {
+			sw, e1 := strconv.Atoi(dims[0])
+			sh, e2 := strconv.Atoi(dims[1])
+
+			if e1 == nil && e2 == nil {
+				if x+w > sw {
+					w = sw - x
+				}
+				if y+h > sh {
+					h = sh - y
+				}
+			}
+		}
+	}
+
+	w &^= 1
+	h &^= 1
+
+	if w < 16 || h < 16 {
+		return "", "", fmt.Errorf("selected window is too small or off-screen")
+	}
+
+	return fmt.Sprintf("%dx%d", w, h), fmt.Sprintf("+%d,%d", x, y), nil
 }
 
 func getPulseSources() ([]string, error) {
@@ -419,14 +495,28 @@ func (m *RecorderManager) StartRecording() {
 
 	resMode := m.ui.ComboRes.GetActiveID()
 
-	if resMode == "area" {
+	if resMode == "area" || resMode == "window" {
 		m.mu.Unlock()
 
-		m.setStatus(
-			"Status: Drag mouse to select recording area...",
+		var (
+			areaRes    string
+			areaOffset string
+			err        error
 		)
 
-		areaRes, areaOffset, err := selectAreaWithSlop()
+		if resMode == "window" {
+			m.setStatus(
+				"Status: Click the window you want to record...",
+			)
+
+			areaRes, areaOffset, err = selectWindowWithSlop()
+		} else {
+			m.setStatus(
+				"Status: Drag mouse to select recording area...",
+			)
+
+			areaRes, areaOffset, err = selectAreaWithSlop()
+		}
 
 		if err != nil {
 			m.setStatus("Error: " + err.Error())
@@ -442,6 +532,16 @@ func (m *RecorderManager) StartRecording() {
 
 		m.activeRes = areaRes
 		m.activeOffset = areaOffset
+	} else if strings.HasPrefix(resMode, "monitor:") {
+		mon, found := findMonitor(strings.TrimPrefix(resMode, "monitor:"))
+		if !found {
+			m.mu.Unlock()
+			m.setStatus("Error: The selected monitor is not connected")
+			return
+		}
+
+		m.activeRes = fmt.Sprintf("%dx%d", mon.W&^1, mon.H&^1)
+		m.activeOffset = fmt.Sprintf("+%d,%d", mon.X, mon.Y)
 	} else {
 		nativeRes, err := getNativeResolution()
 
@@ -542,6 +642,19 @@ func (m *RecorderManager) startRecordingLocked() {
 		m.setStatus("Error: Invalid save directory")
 		m.restoreWindow()
 		return
+	}
+
+	minFree := m.selectedMinFreeBytes()
+	if minFree > 0 {
+		if free, freeErr := freeDiskBytes(saveDir); freeErr == nil && free < minFree {
+			m.setStatus(fmt.Sprintf(
+				"Error: Not enough free disk space (%s free, %s required)",
+				formatBytes(free),
+				formatBytes(minFree),
+			))
+			m.restoreWindow()
+			return
+		}
 	}
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -669,7 +782,13 @@ func (m *RecorderManager) startRecordingLocked() {
 		)
 		m.tempPartFiles = nil
 		m.audioPartFiles = nil
+		m.autoStopReason = ""
 	}
+
+	m.recordDir = saveDir
+	m.autoStopAfter = m.selectedAutoStop()
+	m.minFreeBytes = minFree
+	quality := m.selectedQuality()
 
 	// Video and audio are deliberately written by separate FFmpeg processes.
 	// The video process never waits for PulseAudio or an audio filter/muxer.
@@ -770,6 +889,7 @@ func (m *RecorderManager) startRecordingLocked() {
 			hw,
 			false,
 			vfInGraph,
+			quality,
 		)...,
 	)
 	videoArgs = append(videoArgs, videoPartFile)
@@ -998,6 +1118,16 @@ func (m *RecorderManager) setControlsSensitive(
 	m.ui.ComboRes.SetSensitive(enabled)
 	m.ui.ComboFormat.SetSensitive(enabled)
 	m.ui.ComboCountdown.SetSensitive(enabled)
+
+	// A fixed bitrate overrides the quality level, so that combo is disabled
+	// while a bitrate is chosen.
+	m.ui.ComboBitrate.SetSensitive(enabled)
+	m.ui.ComboQuality.SetSensitive(
+		enabled &&
+			m.ui.ComboBitrate.GetActiveID() == "0",
+	)
+	m.ui.ComboAutoStop.SetSensitive(enabled)
+	m.ui.ComboDiskGuard.SetSensitive(enabled)
 
 	m.ui.ChkMinimize.SetSensitive(enabled)
 	m.ui.ChkScreenkey.SetSensitive(enabled)
@@ -1282,6 +1412,8 @@ func (m *RecorderManager) finalizeRecording() {
 	audioParts := append([]string(nil), m.audioPartFiles...)
 	outputFile := m.outputFile
 	suppressNotification := m.suppressNotifications
+	autoStopReason := m.autoStopReason
+	m.autoStopReason = ""
 
 	m.stopScreenkeyLocked()
 	m.stopWebcamPreviewLocked()
@@ -1436,7 +1568,7 @@ func (m *RecorderManager) finalizeRecording() {
 					m.ui.Window,
 					"success",
 					outputFile,
-					"",
+					autoStopReason,
 				)
 			}
 			return
@@ -1693,12 +1825,19 @@ func (m *RecorderManager) runTimer(
 
 	defer ticker.Stop()
 
+	var (
+		tick      int
+		triggered bool
+	)
+
 	for {
 		select {
 		case <-stop:
 			return
 
 		case <-ticker.C:
+			tick++
+
 			m.mu.Lock()
 
 			if !m.isRecording {
@@ -1712,10 +1851,50 @@ func (m *RecorderManager) runTimer(
 				time.Since(m.startTime) -
 					m.pausedDuration
 
+			limit := m.autoStopAfter
+			minFree := m.minFreeBytes
+			dir := m.recordDir
+
+			// The disk guard is checked every third second; the list of files
+			// is copied here and measured after the lock is released.
+			var recordedFiles []string
+			if minFree > 0 && !isPaused && tick%3 == 0 {
+				recordedFiles = append(recordedFiles, m.tempPartFiles...)
+				recordedFiles = append(recordedFiles, m.audioPartFiles...)
+				recordedFiles = append(
+					recordedFiles,
+					m.currentPartFile,
+					m.currentAudioPartFile,
+				)
+			}
+
 			m.mu.Unlock()
 
 			if elapsed < 0 {
 				elapsed = 0
+			}
+
+			if !triggered && !isPaused {
+				reason := ""
+
+				if limit > 0 && elapsed >= limit {
+					reason = "Recording stopped automatically: the time limit was reached."
+				} else if recordedFiles != nil {
+					reason = diskLowReason(dir, minFree, totalFileSize(recordedFiles))
+				}
+
+				if reason != "" {
+					triggered = true
+
+					m.mu.Lock()
+					m.autoStopReason = reason
+					m.mu.Unlock()
+
+					// Same path as the Stop button / Ctrl+Q.
+					glib.IdleAdd(func() {
+						m.StopRecording()
+					})
+				}
 			}
 
 			hours := int(
@@ -1735,6 +1914,11 @@ func (m *RecorderManager) runTimer(
 				hours,
 				minutes,
 				seconds,
+			)
+
+			updateTrayTooltip(
+				timeStr,
+				isPaused,
 			)
 
 			if isPaused {

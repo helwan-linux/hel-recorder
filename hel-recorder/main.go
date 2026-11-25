@@ -20,12 +20,11 @@ func main() {
 
 	closing := false
 
-	win.Connect("delete-event", func(
-		_ *gtk.Window,
-		_ *gdk.Event,
-	) bool {
+	// quit stops any recording, waits until it is saved, then exits. It is
+	// shared by the window close button and the tray "Quit" item.
+	quit := func() {
 		if closing {
-			return true
+			return
 		}
 
 		closing = true
@@ -41,13 +40,22 @@ func main() {
 			}
 
 			glib.IdleAdd(func() {
+				ShutdownTray()
 				win.Destroy()
 				gtk.MainQuit()
 			})
 		}()
+	}
 
+	win.Connect("delete-event", func(
+		_ *gtk.Window,
+		_ *gdk.Event,
+	) bool {
+		quit()
 		return true
 	})
+
+	SetupTray(manager, ui, quit)
 
 	win.ShowAll()
 	gtk.Main()

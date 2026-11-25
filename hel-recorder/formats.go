@@ -201,41 +201,86 @@ func gopSize(fps string) int {
 	return n * 2
 }
 
-func h264VideoArgs(hw hwEncoder, gop string, vfInGraph bool) []string {
+// qualitySettings is the rate-control choice made in the Advanced panel.
+type qualitySettings struct {
+	Level   string // "high", "standard" or "small"; ignored when Bitrate > 0
+	Bitrate int    // target bitrate in kbps; 0 means constant quality
+}
+
+// qualityOffset shifts the default QP/CRF value of every encoder. A lower
+// number means better quality and a larger file.
+func (q qualitySettings) qualityOffset() int {
+	switch q.Level {
+	case "high":
+		return -4
+	case "small":
+		return 6
+	default:
+		return 0
+	}
+}
+
+func (q qualitySettings) bitrateArg() string {
+	return strconv.Itoa(q.Bitrate) + "k"
+}
+
+func (q qualitySettings) bufsizeArg() string {
+	return strconv.Itoa(q.Bitrate*2) + "k"
+}
+
+func h264VideoArgs(hw hwEncoder, gop string, vfInGraph bool, q qualitySettings) []string {
 	switch hw.Kind {
 	case hwVAAPI:
 		args := []string{}
 		if !vfInGraph {
 			args = append(args, "-vf", hw.vaapiUploadFilter())
 		}
-		return append(args,
-			"-c:v", "h264_vaapi",
-			"-qp", "22",
-			"-bf", "0",
-			"-g", gop,
-		)
+
+		args = append(args, "-c:v", "h264_vaapi")
+
+		if q.Bitrate > 0 {
+			args = append(args, "-b:v", q.bitrateArg(), "-maxrate", q.bitrateArg())
+		} else {
+			args = append(args, "-qp", strconv.Itoa(22+q.qualityOffset()))
+		}
+
+		return append(args, "-bf", "0", "-g", gop)
 
 	case hwNVENC:
-		return []string{
+		args := []string{
 			"-c:v", "h264_nvenc",
 			"-preset", "p1",
 			"-tune", "ll",
-			"-rc", "constqp",
-			"-qp", "23",
-			"-bf", "0",
-			"-g", gop,
 		}
 
+		if q.Bitrate > 0 {
+			args = append(args, "-rc", "cbr", "-b:v", q.bitrateArg())
+		} else {
+			args = append(args, "-rc", "constqp", "-qp", strconv.Itoa(23+q.qualityOffset()))
+		}
+
+		return append(args, "-bf", "0", "-g", gop)
+
 	default:
-		return []string{
+		args := []string{
 			"-pix_fmt", "yuv420p",
 			"-sws_flags", "fast_bilinear",
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-tune", "zerolatency",
-			"-crf", "22",
-			"-g", gop,
 		}
+
+		if q.Bitrate > 0 {
+			args = append(args,
+				"-b:v", q.bitrateArg(),
+				"-maxrate", q.bitrateArg(),
+				"-bufsize", q.bufsizeArg(),
+			)
+		} else {
+			args = append(args, "-crf", strconv.Itoa(22+q.qualityOffset()))
+		}
+
+		return append(args, "-g", gop)
 	}
 }
 
@@ -255,15 +300,23 @@ func internalPartExt(formatExt string) string {
 //
 // vfInGraph tells the function that the video filter chain (including the
 // VAAPI upload) is already part of -filter_complex, so no -vf must be added.
+// q selects the quality level or a fixed bitrate.
 func getFormatSettings(
 	formatExt string,
 	fps string,
 	hw hwEncoder,
 	hasAudio bool,
 	vfInGraph bool,
+	q qualitySettings,
 ) []string {
 	formatExt = strings.ToLower(strings.TrimSpace(formatExt))
 	gop := strconv.Itoa(gopSize(fps))
+
+	// A GIF is produced from this recording by a palette pass, so the
+	// intermediate file always uses the standard quality.
+	if formatExt == "gif" {
+		q = qualitySettings{Level: "standard"}
+	}
 
 	if formatExt == "webm" {
 		args := []string{
@@ -275,10 +328,18 @@ func getFormatSettings(
 			"-row-mt", "1",
 			"-tile-columns", "2",
 			"-lag-in-frames", "0",
-			"-crf", "32",
-			"-b:v", "0",
-			"-g", gop,
 		}
+
+		if q.Bitrate > 0 {
+			args = append(args, "-b:v", q.bitrateArg())
+		} else {
+			args = append(args,
+				"-crf", strconv.Itoa(32+q.qualityOffset()),
+				"-b:v", "0",
+			)
+		}
+
+		args = append(args, "-g", gop)
 
 		if hasAudio {
 			args = append(args, "-c:a", "libopus", "-b:a", "192k")
@@ -289,7 +350,7 @@ func getFormatSettings(
 
 	// mp4, mkv and gif are all recorded as H.264 in Matroska.
 	args := []string{"-r", fps}
-	args = append(args, h264VideoArgs(hw, gop, vfInGraph)...)
+	args = append(args, h264VideoArgs(hw, gop, vfInGraph, q)...)
 
 	if hasAudio && formatExt != "gif" {
 		args = append(args, "-c:a", "aac", "-b:a", "192k")
