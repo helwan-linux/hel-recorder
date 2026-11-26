@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./App.jpg" width="300" alt="Helwan Screen Recorder">
+<img src="./App.jpg" width="400" alt="Helwan Screen Recorder">
 
 # Helwan Screen Recorder
 
