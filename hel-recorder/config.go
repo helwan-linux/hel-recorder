@@ -30,6 +30,14 @@ type AppSettings struct {
 	CamPos      string `json:"webcam_position"`
 	CamSize     string `json:"webcam_size"`
 	SaveDir     string `json:"save_dir"`
+
+	// Added in 1.3.0. HideCursor is stored inverted so that older config
+	// files (without the field) keep the cursor visible.
+	HideCursor    bool   `json:"hide_cursor"`
+	MicVolume     string `json:"mic_volume_percent"`
+	SysVolume     string `json:"system_volume_percent"`
+	Denoise       bool   `json:"reduce_mic_noise"`
+	SeparateAudio bool   `json:"separate_audio_tracks"`
 }
 
 func settingsPath() string {
@@ -113,6 +121,12 @@ func collectSettings(ui *AppUI) AppSettings {
 		CamPos:      ui.ComboCamPos.GetActiveID(),
 		CamSize:     ui.ComboCamSize.GetActiveID(),
 		SaveDir:     ui.FileChooser.GetFilename(),
+
+		HideCursor:    !ui.ChkCursor.GetActive(),
+		MicVolume:     ui.ComboMicVol.GetActiveID(),
+		SysVolume:     ui.ComboSysVol.GetActiveID(),
+		Denoise:       ui.ChkDenoise.GetActive(),
+		SeparateAudio: ui.ChkSeparate.GetActive(),
 	}
 }
 
@@ -165,6 +179,16 @@ func applySettings(ui *AppUI) {
 	setComboID(ui.ComboCamPos, s.CamPos)
 	setComboID(ui.ComboCamSize, s.CamSize)
 
+	ui.ChkCursor.SetActive(!s.HideCursor)
+	setComboID(ui.ComboMicVol, s.MicVolume)
+	setComboID(ui.ComboSysVol, s.SysVolume)
+
+	if ui.ChkDenoise.GetSensitive() {
+		ui.ChkDenoise.SetActive(s.Denoise)
+	}
+
+	ui.ChkSeparate.SetActive(s.SeparateAudio)
+
 	if s.SaveDir != "" {
 		if info, err := os.Stat(s.SaveDir); err == nil && info.IsDir() {
 			_ = ui.FileChooser.SetCurrentFolder(s.SaveDir)
@@ -191,6 +215,8 @@ func connectSettingsSaving(ui *AppUI) {
 		ui.ComboSystemAudio,
 		ui.ComboCamPos,
 		ui.ComboCamSize,
+		ui.ComboMicVol,
+		ui.ComboSysVol,
 	} {
 		combo.Connect("changed", save)
 	}
@@ -201,6 +227,9 @@ func connectSettingsSaving(ui *AppUI) {
 		ui.ChkMinimize,
 		ui.ChkScreenkey,
 		ui.ChkWebcam,
+		ui.ChkCursor,
+		ui.ChkDenoise,
+		ui.ChkSeparate,
 	} {
 		check.Connect("toggled", save)
 	}

@@ -723,15 +723,36 @@ func (m *RecorderManager) startRecordingLocked() {
 	}
 
 	audioInputs := make([]string, 0, 2)
+	micInputIdx, sysInputIdx := -1, -1
+
 	if formatExt != "gif" {
 		if recordMic {
+			micInputIdx = len(audioInputs)
 			audioInputs = append(audioInputs, m.selectedMicrophone())
 		}
 		if recordSystem {
 			if source := m.selectedSystemAudio(); source != "" {
+				sysInputIdx = len(audioInputs)
 				audioInputs = append(audioInputs, source)
 			}
 		}
+	}
+
+	// Audio levels and processing, read here because this runs on the GTK
+	// main thread.
+	mixOptions := audioMixOptions{
+		MicIndex:  micInputIdx,
+		SysIndex:  sysInputIdx,
+		MicVolume: parseVolumePercent(m.ui.ComboMicVol.GetActiveID()),
+		SysVolume: parseVolumePercent(m.ui.ComboSysVol.GetActiveID()),
+		Denoise: m.ui.ChkDenoise.GetActive() &&
+			ffmpegHasFilter("afftdn"),
+		Separate: m.ui.ChkSeparate.GetActive(),
+	}
+
+	drawMouse := "1"
+	if m.ui.ChkCursor != nil && !m.ui.ChkCursor.GetActive() {
+		drawMouse = "0"
 	}
 
 	useWebcam := m.ui.ChkWebcam != nil &&
@@ -828,7 +849,7 @@ func (m *RecorderManager) startRecordingLocked() {
 		videoArgs,
 		"-f", "x11grab",
 		"-framerate", fps,
-		"-draw_mouse", "1",
+		"-draw_mouse", drawMouse,
 		"-video_size", res,
 		"-i", grabInput,
 	)
@@ -943,9 +964,7 @@ func (m *RecorderManager) startRecordingLocked() {
 			audioArgs = append(audioArgs, "-stats")
 		}
 
-		audioInputIndices := make([]int, 0, len(audioInputs))
-
-		for i, source := range audioInputs {
+		for _, source := range audioInputs {
 			audioArgs = append(audioArgs, inputQueueArgs("1024")...)
 			audioArgs = append(
 				audioArgs,
@@ -953,31 +972,25 @@ func (m *RecorderManager) startRecordingLocked() {
 				"-f", "pulse",
 				"-i", source,
 			)
-			audioInputIndices = append(audioInputIndices, i)
 		}
 
-		audioFilter := ""
-		audioMap := "0:a:0"
-
-		switch len(audioInputIndices) {
-		case 1:
-			audioFilter = "[0:a:0]aresample=async=1000[aout]"
-			audioMap = "[aout]"
-		case 2:
-			audioFilter = fmt.Sprintf(
-				"[%d:a:0][%d:a:0]amix=inputs=2:duration=longest:dropout_transition=2,"+
-					"volume=2,alimiter=limit=0.95,aresample=async=1000[aout]",
-				audioInputIndices[0],
-				audioInputIndices[1],
-			)
-			audioMap = "[aout]"
-		}
+		audioFilter, audioMaps := buildAudioFilter(mixOptions)
 
 		if audioFilter != "" {
 			audioArgs = append(audioArgs, "-filter_complex", audioFilter)
 		}
 
-		audioArgs = append(audioArgs, "-map", audioMap)
+		for _, label := range audioMaps {
+			audioArgs = append(audioArgs, "-map", label)
+		}
+
+		if len(audioMaps) == 2 {
+			audioArgs = append(
+				audioArgs,
+				"-metadata:s:a:0", "title=Microphone",
+				"-metadata:s:a:1", "title=System Audio",
+			)
+		}
 
 		if formatExt == "webm" {
 			audioArgs = append(
@@ -1128,6 +1141,12 @@ func (m *RecorderManager) setControlsSensitive(
 	)
 	m.ui.ComboAutoStop.SetSensitive(enabled)
 	m.ui.ComboDiskGuard.SetSensitive(enabled)
+
+	m.ui.ComboMicVol.SetSensitive(enabled)
+	m.ui.ComboSysVol.SetSensitive(enabled)
+	m.ui.ChkSeparate.SetSensitive(enabled)
+	m.ui.ChkDenoise.SetSensitive(enabled && ffmpegHasFilter("afftdn"))
+	m.ui.ChkCursor.SetSensitive(enabled)
 
 	m.ui.ChkMinimize.SetSensitive(enabled)
 	m.ui.ChkScreenkey.SetSensitive(enabled)
@@ -1786,6 +1805,7 @@ func mergeAudioPartsToFile(parts []string, outputFile string) error {
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listName,
+		"-map", "0",
 		"-c", "copy",
 		"-f", "matroska",
 		outputFile,
@@ -1800,7 +1820,7 @@ func muxVideoAudio(videoFile, audioFile, outputFile string) error {
 		"-i", videoFile,
 		"-i", audioFile,
 		"-map", "0:v:0",
-		"-map", "1:a:0",
+		"-map", "1:a",
 		"-c", "copy",
 	}
 

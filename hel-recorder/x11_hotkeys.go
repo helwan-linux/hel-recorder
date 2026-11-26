@@ -9,14 +9,16 @@ package main
 #include <stdlib.h>
 #include <sys/select.h>
 
-// Global shortcuts are Ctrl+<key> (R, E, Q, G).
-#define HSR_KEY_COUNT 4
+// Global shortcuts are Ctrl+<key> (R, E, Q, G, T).
+#define HSR_KEY_COUNT 5
 #define HSR_LOCK_VARIANTS 4
 #define HSR_BASE_MODS (ControlMask)
 
 // Order matters: the index + 1 is the value returned by hsr_wait_hotkey.
-//   1 = start, 2 = pause/resume, 3 = stop, 4 = magnifier
-static const KeySym hsr_keysyms[HSR_KEY_COUNT] = { XK_r, XK_e, XK_q, XK_g };
+//   1 = start, 2 = pause/resume, 3 = stop, 4 = magnifier, 5 = mouse effects
+static const KeySym hsr_keysyms[HSR_KEY_COUNT] = {
+    XK_r, XK_e, XK_q, XK_g, XK_t
+};
 
 // CapsLock and NumLock must not prevent a shortcut from working.
 static const unsigned int hsr_lock_variants[HSR_LOCK_VARIANTS] = {
@@ -32,6 +34,7 @@ static int hsr_x_error_handler(Display *display, XErrorEvent *event) {
     if (event->error_code == BadAccess) {
         hsr_grab_error = 1;
     }
+
     return 0;
 }
 
@@ -40,13 +43,26 @@ static void hsr_set_grabs(Display *display, int grab) {
 
     for (int i = 0; i < HSR_KEY_COUNT; i++) {
         for (int j = 0; j < HSR_LOCK_VARIANTS; j++) {
-            unsigned int mods = HSR_BASE_MODS | hsr_lock_variants[j];
+            unsigned int mods =
+                HSR_BASE_MODS | hsr_lock_variants[j];
 
             if (grab) {
-                XGrabKey(display, hsr_keycodes[i], mods, root, False,
-                         GrabModeAsync, GrabModeAsync);
+                XGrabKey(
+                    display,
+                    hsr_keycodes[i],
+                    mods,
+                    root,
+                    False,
+                    GrabModeAsync,
+                    GrabModeAsync
+                );
             } else {
-                XUngrabKey(display, hsr_keycodes[i], mods, root);
+                XUngrabKey(
+                    display,
+                    hsr_keycodes[i],
+                    mods,
+                    root
+                );
             }
         }
     }
@@ -54,12 +70,15 @@ static void hsr_set_grabs(Display *display, int grab) {
 
 static Display* hsr_open_and_grab(void) {
     Display *display = XOpenDisplay(NULL);
+
     if (display == NULL) {
         return NULL;
     }
 
     for (int i = 0; i < HSR_KEY_COUNT; i++) {
-        hsr_keycodes[i] = XKeysymToKeycode(display, hsr_keysyms[i]);
+        hsr_keycodes[i] =
+            XKeysymToKeycode(display, hsr_keysyms[i]);
+
         if (hsr_keycodes[i] == 0) {
             XCloseDisplay(display);
             return NULL;
@@ -69,7 +88,9 @@ static Display* hsr_open_and_grab(void) {
     hsr_grab_error = 0;
 
     int (*old_handler)(Display *, XErrorEvent *);
-    old_handler = XSetErrorHandler(hsr_x_error_handler);
+    old_handler = XSetErrorHandler(
+        hsr_x_error_handler
+    );
 
     hsr_set_grabs(display, 1);
 
@@ -87,10 +108,13 @@ static Display* hsr_open_and_grab(void) {
 }
 
 // Blocks for up to timeout_ms waiting for X events (no busy polling), and
-// returns 1..4 for a recognised shortcut or 0 otherwise. Matching is done on
+// returns 1..5 for a recognised shortcut or 0 otherwise. Matching is done on
 // keycodes, so it works regardless of the active keyboard layout (for example
 // Arabic).
-static int hsr_wait_hotkey(Display *display, int timeout_ms) {
+static int hsr_wait_hotkey(
+    Display *display,
+    int timeout_ms
+) {
     if (display == NULL) {
         return 0;
     }
@@ -104,9 +128,16 @@ static int hsr_wait_hotkey(Display *display, int timeout_ms) {
         FD_SET(fd, &fds);
 
         tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        tv.tv_usec =
+            (timeout_ms % 1000) * 1000;
 
-        if (select(fd + 1, &fds, NULL, NULL, &tv) <= 0) {
+        if (select(
+                fd + 1,
+                &fds,
+                NULL,
+                NULL,
+                &tv
+            ) <= 0) {
             return 0;
         }
     }
@@ -119,13 +150,16 @@ static int hsr_wait_hotkey(Display *display, int timeout_ms) {
             continue;
         }
 
-        unsigned int state = event.xkey.state & HSR_BASE_MODS;
+        unsigned int state =
+            event.xkey.state & HSR_BASE_MODS;
+
         if (state != HSR_BASE_MODS) {
             continue;
         }
 
         for (int i = 0; i < HSR_KEY_COUNT; i++) {
-            if (event.xkey.keycode == hsr_keycodes[i]) {
+            if (event.xkey.keycode ==
+                hsr_keycodes[i]) {
                 return i + 1;
             }
         }
@@ -169,11 +203,14 @@ type GlobalHotkeys struct {
 	once    sync.Once
 }
 
-func StartGlobalHotkeys(manager *RecorderManager) (*GlobalHotkeys, error) {
+func StartGlobalHotkeys(
+	manager *RecorderManager,
+) (*GlobalHotkeys, error) {
 	display := C.hsr_open_and_grab()
+
 	if display == nil {
 		return nil, fmt.Errorf(
-			"cannot register global X11 shortcuts (Ctrl+R/E/Q/G); they may already be in use",
+			"cannot register global X11 shortcuts (Ctrl+R/E/Q/G/T); they may already be in use",
 		)
 	}
 
@@ -188,7 +225,9 @@ func StartGlobalHotkeys(manager *RecorderManager) (*GlobalHotkeys, error) {
 	return hotkeys, nil
 }
 
-func (h *GlobalHotkeys) run(manager *RecorderManager) {
+func (h *GlobalHotkeys) run(
+	manager *RecorderManager,
+) {
 	defer close(h.done)
 	defer C.hsr_close_hotkeys(h.display)
 
@@ -201,16 +240,28 @@ func (h *GlobalHotkeys) run(manager *RecorderManager) {
 		select {
 		case <-h.stop:
 			return
+
 		default:
 		}
 
-		key := int(C.hsr_wait_hotkey(h.display, C.int(hotkeyWaitMs)))
+		key := int(
+			C.hsr_wait_hotkey(
+				h.display,
+				C.int(hotkeyWaitMs),
+			),
+		)
+
 		if key == 0 {
 			continue
 		}
 
 		now := time.Now()
-		repeated := key == lastKey && now.Sub(lastAt) < hotkeyRepeatGuard
+
+		repeated :=
+			key == lastKey &&
+				now.Sub(lastAt) <
+					hotkeyRepeatGuard
+
 		lastKey = key
 		lastAt = now
 
@@ -231,6 +282,9 @@ func (h *GlobalHotkeys) run(manager *RecorderManager) {
 
 			case 4:
 				manager.ToggleMagnifier()
+
+			case 5:
+				manager.ToggleMouseEffects()
 			}
 		})
 	}

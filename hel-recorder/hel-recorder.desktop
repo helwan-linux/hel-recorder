@@ -1,8 +1,11 @@
 [Desktop Entry]
 Name=Helwan Screen Recorder
+GenericName=Screen Recorder
 Comment=Screen and Audio Recorder
-Exec=/usr/local/bin/hel-recorder
-Icon=/usr/share/hel-recorder/icon.png
+Exec=hel-recorder
+Icon=hel-recorder
 Terminal=false
 Type=Application
-Categories=AudioVideo;Recorder;
+Categories=AudioVideo;Video;Recorder;
+StartupNotify=true
+StartupWMClass=hel-recorder

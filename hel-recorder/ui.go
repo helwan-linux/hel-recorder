@@ -30,6 +30,13 @@ type AppUI struct {
 	ChkMinimize      *gtk.CheckButton
 	ChkScreenkey     *gtk.CheckButton
 	ChkWebcam        *gtk.CheckButton
+	ChkCursor        *gtk.CheckButton
+	ChkMouseFx       *gtk.CheckButton
+	ChkDenoise       *gtk.CheckButton
+	ChkSeparate      *gtk.CheckButton
+	ComboMicVol      *gtk.ComboBoxText
+	ComboSysVol      *gtk.ComboBoxText
+	BtnScreenshot    *gtk.Button
 	ComboCamPos      *gtk.ComboBoxText
 	ComboCamSize     *gtk.ComboBoxText
 	FileChooser      *gtk.FileChooserButton
@@ -376,8 +383,17 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	comboRes, _ := gtk.ComboBoxTextNew()
 	comboRes.Append("auto", "Full Screen (Native)")
-	comboRes.Append("area", "Select Area (slop)")
-	comboRes.Append("window", "Select Window (slop)")
+
+	// Area and window selection need the external 'slop' tool.
+	if hasCommand("slop") {
+		comboRes.Append("area", "Select Area (slop)")
+		comboRes.Append("window", "Select Window (slop)")
+	} else {
+		comboRes.SetTooltipText(
+			"Install 'slop' to enable area and window selection",
+		)
+	}
+
 	appendMonitorChoices(comboRes)
 	comboRes.SetActiveID("auto")
 	comboRes.SetName("hsr-combo")
@@ -484,7 +500,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	advancedPanel.SetName("hsr-panel")
 
 	advancedExpander, _ := gtk.ExpanderNew(
-		"Advanced: quality, bitrate and auto-stop",
+		"Advanced: quality, audio and limits",
 	)
 
 	advancedExpander.SetName("hsr-section")
@@ -589,6 +605,73 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	advancedGrid.Attach(lblDiskGuard, 2, 1, 1, 1)
 	advancedGrid.Attach(comboDiskGuard, 3, 1, 1, 1)
+
+	/* AUDIO LEVELS */
+
+	volumeChoices := func() *gtk.ComboBoxText {
+		combo, _ := gtk.ComboBoxTextNew()
+		combo.Append("50", "50%")
+		combo.Append("75", "75%")
+		combo.Append("100", "100% (default)")
+		combo.Append("150", "150%")
+		combo.Append("200", "200%")
+		combo.SetActiveID("100")
+		combo.SetName("hsr-combo")
+		combo.SetSizeRequest(250, 36)
+
+		return combo
+	}
+
+	lblMicVol := makeIconLabel(
+		"audio-input-microphone",
+		"Mic Volume:",
+	)
+
+	comboMicVol := volumeChoices()
+
+	advancedGrid.Attach(lblMicVol, 0, 2, 1, 1)
+	advancedGrid.Attach(comboMicVol, 1, 2, 1, 1)
+
+	lblSysVol := makeIconLabel(
+		"audio-volume-high",
+		"System Volume:",
+	)
+
+	comboSysVol := volumeChoices()
+
+	advancedGrid.Attach(lblSysVol, 2, 2, 1, 1)
+	advancedGrid.Attach(comboSysVol, 3, 2, 1, 1)
+
+	chkDenoise, _ := gtk.CheckButtonNewWithLabel(
+		"Reduce microphone noise",
+	)
+
+	chkDenoise.SetName("hsr-check")
+
+	if ffmpegHasFilter("afftdn") {
+		chkDenoise.SetTooltipText(
+			"High-pass filter + FFT noise reduction on the microphone",
+		)
+	} else {
+		chkDenoise.SetSensitive(false)
+		chkDenoise.SetTooltipText(
+			"Your FFmpeg build has no 'afftdn' filter",
+		)
+	}
+
+	advancedGrid.Attach(chkDenoise, 0, 3, 2, 1)
+
+	chkSeparate, _ := gtk.CheckButtonNewWithLabel(
+		"Keep microphone and system audio as separate tracks",
+	)
+
+	chkSeparate.SetName("hsr-check")
+	chkSeparate.SetTooltipText(
+		"Only when both are recorded. Useful for editing afterwards; " +
+			"some players play only the first track.",
+	)
+
+	advancedGrid.Attach(chkSeparate, 2, 3, 2, 1)
 
 	advancedExpander.Add(advancedGrid)
 
@@ -855,8 +938,46 @@ func InitUI() (*AppUI, *gtk.Window) {
 		0,
 	)
 
+	if !hasCommand("screenkey") {
+		chkScreenkey.SetSensitive(false)
+		chkScreenkey.SetTooltipText(
+			"Install 'screenkey' to show keystrokes on screen",
+		)
+	}
+
 	leftBox.PackStart(
 		chkScreenkey,
+		false,
+		false,
+		0,
+	)
+
+	chkCursor, _ := gtk.CheckButtonNewWithLabel(
+		"Capture mouse cursor",
+	)
+
+	chkCursor.SetActive(true)
+	chkCursor.SetName("hsr-check")
+
+	leftBox.PackStart(
+		chkCursor,
+		false,
+		false,
+		0,
+	)
+
+	chkMouseFx, _ := gtk.CheckButtonNewWithLabel(
+		"Mouse click effects (Ctrl+T)",
+	)
+
+	chkMouseFx.SetName("hsr-check")
+	chkMouseFx.SetTooltipText(
+		"Highlights the pointer and shows a ripple on every click. " +
+			"Requires a compositing desktop.",
+	)
+
+	leftBox.PackStart(
+		chkMouseFx,
 		false,
 		false,
 		0,
@@ -1084,6 +1205,18 @@ func InitUI() (*AppUI, *gtk.Window) {
 		0,
 	)
 
+	btnScreenshot, _ := gtk.ButtonNewWithLabel("Screenshot")
+	btnScreenshot.SetTooltipText(
+		"Save a PNG of the selected screen, area, window or monitor",
+	)
+
+	savePanel.PackStart(
+		btnScreenshot,
+		false,
+		false,
+		0,
+	)
+
 	mainBox.PackStart(
 		savePanel,
 		false,
@@ -1188,6 +1321,13 @@ func InitUI() (*AppUI, *gtk.Window) {
 		ChkMinimize:      chkMinimize,
 		ChkScreenkey:     chkScreenkey,
 		ChkWebcam:        chkWebcam,
+		ChkCursor:        chkCursor,
+		ChkMouseFx:       chkMouseFx,
+		ChkDenoise:       chkDenoise,
+		ChkSeparate:      chkSeparate,
+		ComboMicVol:      comboMicVol,
+		ComboSysVol:      comboSysVol,
+		BtnScreenshot:    btnScreenshot,
 		ComboCamPos:      comboCamPos,
 		ComboCamSize:     comboCamSize,
 		FileChooser:      fileChooser,
@@ -1294,14 +1434,33 @@ func showRecordingResult(
 		parent,
 		gtk.DIALOG_MODAL,
 		messageType,
-		gtk.BUTTONS_OK,
+		gtk.BUTTONS_NONE,
 		"%s",
 		message,
 	)
 
 	dialog.SetTitle(title)
-	dialog.Run()
+
+	if result != "warning" {
+		dialog.AddButton("Open Folder", respOpenFolder)
+	}
+
+	if result == "success" {
+		dialog.AddButton("Play", respPlay)
+	}
+
+	dialog.AddButton("OK", gtk.RESPONSE_OK)
+
+	response := dialog.Run()
 	dialog.Destroy()
+
+	switch response {
+	case respOpenFolder:
+		openWithDefaultApp(filepath.Dir(outputFile))
+
+	case respPlay:
+		openWithDefaultApp(outputFile)
+	}
 }
 
 func showHelpDialog(parent *gtk.Window) {
@@ -1315,12 +1474,16 @@ func showHelpDialog(parent *gtk.Window) {
 			"Ctrl + R: Start recording\n"+
 			"Ctrl + E: Pause / Resume recording\n"+
 			"Ctrl + Q: Stop and save\n"+
-			"Ctrl + G: Toggle Magnifier\n\n"+
+			"Ctrl + G: Toggle Magnifier\n"+
+			"Ctrl + T: Mouse Effect\n\n"+
 			"Features:\n"+
 			"- Multiple video formats (MP4, MKV, WebM, GIF).\n"+
 			"- Hardware encoding (VAAPI / NVENC) when available.\n"+
 			"- Floating OSD status pill during recording.\n"+
 			"- Webcam overlay (PiP) and on-screen keystrokes.\n"+
+			"- Mouse click effects, optional cursor capture and screenshots.\n"+
+			"- Mic / system volume, noise reduction and separate audio tracks.\n"+
+			"- Recovery of unfinished recordings after a crash.\n"+
 			"- Quality / bitrate options, auto-stop by time or low disk space.\n"+
 			"- Monitor selection and a system tray icon with controls.\n\n"+
 			"Troubleshooting: start the app from a terminal with\n"+
@@ -1352,7 +1515,7 @@ func showAboutDialog(
 		"Helwan Screen Recorder",
 	)
 
-	dialog.SetVersion("1.2.0-2")
+	dialog.SetVersion("1.3.0-1")
 
 	dialog.SetComments(
 		"Screen and audio recorder for Helwan Linux.",
