@@ -492,6 +492,7 @@ The recorder provides global X11 keyboard shortcuts.
 | `Ctrl + E` | Pause / Resume |
 | `Ctrl + Q` | Stop and save |
 | `Ctrl + G` | Toggle magnifier |
+| `Ctrl + T` | Mouse Effect (SOON) |
 
 These shortcuts work outside the main application window.
 
