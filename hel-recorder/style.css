@@ -60,6 +60,12 @@
     font-weight: bold;
 }
 
+#hsr-subsection {
+    color: #65748a;
+    font-size: 12px;
+    font-weight: bold;
+}
+
 #hsr-label {
     color: #263852;
     font-size: 14px;
@@ -131,6 +137,81 @@
     border-radius: 8px;
     border: 1px solid #b9c7d9;
     background: #ffffff;
+}
+
+#hsr-screenshot {
+    background-image: linear-gradient(to bottom, #ffffff, #e7edf5);
+    color: #17263f;
+    border: 1px solid #b7c4d5;
+    border-radius: 9px;
+    font-weight: bold;
+    padding: 7px 16px;
+}
+
+#hsr-screenshot:hover {
+    background-image: linear-gradient(to bottom, #ffffff, #cfd9e6);
+    border-color: #2e8bef;
+}
+
+#hsr-screenshot:active {
+    background-image: none;
+    background-color: #b9c7d9;
+}
+
+/* Tabs (Notebook) */
+
+#hsr-notebook {
+    background: transparent;
+    border: none;
+}
+
+#hsr-notebook > header {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #d5deea;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
+}
+
+#hsr-notebook > header > tabs > tab {
+    background-image: none;
+    background-color: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 8px 8px 0 0;
+    padding: 9px 22px;
+    margin: 0 4px 0 0;
+    min-height: 22px;
+    box-shadow: none;
+}
+
+#hsr-notebook > header > tabs > tab label {
+    color: #52647d;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+#hsr-notebook > header > tabs > tab:hover {
+    background-color: #e6eef8;
+}
+
+#hsr-notebook > header > tabs > tab:hover label {
+    color: #17263f;
+}
+
+#hsr-notebook > header > tabs > tab:checked {
+    background-color: #ffffff;
+    border-bottom: 3px solid #1a82f0;
+}
+
+#hsr-notebook > header > tabs > tab:checked label {
+    color: #096bdc;
+}
+
+#hsr-notebook > stack {
+    background: transparent;
+    border: none;
 }
 
 /* Interaction feedback and disabled states */

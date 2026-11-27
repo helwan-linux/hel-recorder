@@ -189,6 +189,58 @@ func makeActionButton(iconName string, text string, name string) *gtk.Button {
 	return button
 }
 
+// makeTabLabel builds the icon + text label shown on a notebook tab.
+// The text label is intentionally left unnamed so that the tab styling
+// in style.css (normal / selected colors) controls its color.
+func makeTabLabel(iconName string, text string) *gtk.Box {
+	box, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
+
+	img, err := gtk.ImageNewFromIconName(
+		iconName,
+		gtk.ICON_SIZE_MENU,
+	)
+
+	if err == nil {
+		img.SetPixelSize(18)
+		box.PackStart(img, false, false, 0)
+	}
+
+	label, _ := gtk.LabelNew(text)
+	box.PackStart(label, false, false, 0)
+
+	box.ShowAll()
+
+	return box
+}
+
+// makeSectionTitle creates a panel heading such as "Video Settings".
+func makeSectionTitle(text string) *gtk.Label {
+	lbl, _ := gtk.LabelNew(text)
+	lbl.SetName("hsr-section")
+	lbl.SetHAlign(gtk.ALIGN_START)
+
+	return lbl
+}
+
+// makeSubTitle creates a smaller heading used inside a panel.
+func makeSubTitle(text string) *gtk.Label {
+	lbl, _ := gtk.LabelNew(text)
+	lbl.SetName("hsr-subsection")
+	lbl.SetHAlign(gtk.ALIGN_START)
+
+	return lbl
+}
+
+// makePage creates the container used as the content of one notebook tab.
+func makePage() *gtk.Box {
+	page, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 12)
+
+	page.SetMarginTop(14)
+	page.SetMarginBottom(4)
+
+	return page
+}
+
 func InitUI() (*AppUI, *gtk.Window) {
 	loadRecorderCSS()
 
@@ -198,7 +250,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	}
 
 	win.SetTitle("Helwan Screen Recorder")
-	win.SetDefaultSize(900, 900)
+	win.SetDefaultSize(900, 720)
 	win.SetPosition(gtk.WIN_POS_CENTER)
 	win.SetResizable(false)
 	win.SetName("hsr-window")
@@ -336,6 +388,26 @@ func InitUI() (*AppUI, *gtk.Window) {
 	mainBox.PackStart(separator, false, false, 4)
 
 	/* =========================
+	   TABS (NOTEBOOK)
+
+	   Record   : video + audio sources
+	   Advanced : quality, limits, audio processing
+	   Options  : behavior, cursor effects, webcam
+
+	   The notebook takes the size of its tallest page, so switching
+	   tabs never resizes the window and the bottom part of the
+	   program (save folder + Start/Pause/Stop) always stays visible.
+	========================= */
+
+	notebook, _ := gtk.NotebookNew()
+	notebook.SetName("hsr-notebook")
+	notebook.SetTabPos(gtk.POS_TOP)
+
+	pageRecord := makePage()
+	pageAdvanced := makePage()
+	pageOptions := makePage()
+
+	/* =========================
 	   VIDEO SETTINGS
 	========================= */
 
@@ -346,11 +418,12 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	videoPanel.SetName("hsr-panel")
 
-	videoTitle, _ := gtk.LabelNew("Video Settings")
-	videoTitle.SetName("hsr-section")
-	videoTitle.SetHAlign(gtk.ALIGN_START)
-
-	videoPanel.PackStart(videoTitle, false, false, 0)
+	videoPanel.PackStart(
+		makeSectionTitle("Video Settings"),
+		false,
+		false,
+		0,
+	)
 
 	videoGrid, _ := gtk.GridNew()
 
@@ -481,214 +554,6 @@ func InitUI() (*AppUI, *gtk.Window) {
 		0,
 	)
 
-	mainBox.PackStart(
-		videoPanel,
-		false,
-		false,
-		0,
-	)
-
-	/* =========================
-	   ADVANCED: QUALITY + AUTO-STOP
-	========================= */
-
-	advancedPanel, _ := gtk.BoxNew(
-		gtk.ORIENTATION_VERTICAL,
-		8,
-	)
-
-	advancedPanel.SetName("hsr-panel")
-
-	advancedExpander, _ := gtk.ExpanderNew(
-		"Advanced: quality, audio and limits",
-	)
-
-	advancedExpander.SetName("hsr-section")
-
-	advancedGrid, _ := gtk.GridNew()
-
-	advancedGrid.SetRowSpacing(10)
-	advancedGrid.SetColumnSpacing(14)
-	advancedGrid.SetMarginTop(10)
-
-	/* QUALITY */
-
-	lblQuality := makeIconLabel(
-		"preferences-system",
-		"Quality:",
-	)
-
-	comboQuality, _ := gtk.ComboBoxTextNew()
-	comboQuality.Append("high", "High (larger files)")
-	comboQuality.Append("standard", "Standard (recommended)")
-	comboQuality.Append("small", "Small files (lower quality)")
-	comboQuality.SetActiveID("standard")
-	comboQuality.SetName("hsr-combo")
-	comboQuality.SetSizeRequest(250, 36)
-
-	advancedGrid.Attach(lblQuality, 0, 0, 1, 1)
-	advancedGrid.Attach(comboQuality, 1, 0, 1, 1)
-
-	/* BITRATE */
-
-	lblBitrate := makeIconLabel(
-		"utilities-system-monitor",
-		"Bitrate:",
-	)
-
-	comboBitrate, _ := gtk.ComboBoxTextNew()
-	comboBitrate.Append("0", "Auto (by quality)")
-	comboBitrate.Append("2000", "2 Mbps (low)")
-	comboBitrate.Append("4000", "4 Mbps (medium)")
-	comboBitrate.Append("8000", "8 Mbps (high)")
-	comboBitrate.Append("12000", "12 Mbps (very high)")
-	comboBitrate.Append("20000", "20 Mbps (maximum)")
-	comboBitrate.SetActiveID("0")
-	comboBitrate.SetName("hsr-combo")
-	comboBitrate.SetSizeRequest(250, 36)
-	comboBitrate.SetTooltipText(
-		"A fixed bitrate overrides the quality level",
-	)
-
-	// The quality level has no effect while a fixed bitrate is chosen.
-	comboBitrate.Connect("changed", func() {
-		comboQuality.SetSensitive(
-			comboBitrate.GetActiveID() == "0",
-		)
-	})
-
-	advancedGrid.Attach(lblBitrate, 2, 0, 1, 1)
-	advancedGrid.Attach(comboBitrate, 3, 0, 1, 1)
-
-	/* AUTO-STOP: TIME */
-
-	lblStopAfter := makeIconLabel(
-		"alarm",
-		"Stop After:",
-	)
-
-	comboAutoStop, _ := gtk.ComboBoxTextNew()
-	comboAutoStop.Append("0", "No limit")
-	comboAutoStop.Append("5", "5 minutes")
-	comboAutoStop.Append("10", "10 minutes")
-	comboAutoStop.Append("15", "15 minutes")
-	comboAutoStop.Append("30", "30 minutes")
-	comboAutoStop.Append("60", "1 hour")
-	comboAutoStop.Append("120", "2 hours")
-	comboAutoStop.SetActiveID("0")
-	comboAutoStop.SetName("hsr-combo")
-	comboAutoStop.SetSizeRequest(250, 36)
-
-	advancedGrid.Attach(lblStopAfter, 0, 1, 1, 1)
-	advancedGrid.Attach(comboAutoStop, 1, 1, 1, 1)
-
-	/* AUTO-STOP: DISK SPACE */
-
-	lblDiskGuard := makeIconLabel(
-		"drive-harddisk",
-		"Low Disk Guard:",
-	)
-
-	comboDiskGuard, _ := gtk.ComboBoxTextNew()
-	comboDiskGuard.Append("0", "Off")
-	comboDiskGuard.Append("500", "Keep 500 MB free")
-	comboDiskGuard.Append("1024", "Keep 1 GB free")
-	comboDiskGuard.Append("2048", "Keep 2 GB free")
-	comboDiskGuard.Append("5120", "Keep 5 GB free")
-	comboDiskGuard.SetActiveID("1024")
-	comboDiskGuard.SetName("hsr-combo")
-	comboDiskGuard.SetSizeRequest(250, 36)
-	comboDiskGuard.SetTooltipText(
-		"Stops and saves the recording while there is still enough free " +
-			"space to finish saving it",
-	)
-
-	advancedGrid.Attach(lblDiskGuard, 2, 1, 1, 1)
-	advancedGrid.Attach(comboDiskGuard, 3, 1, 1, 1)
-
-	/* AUDIO LEVELS */
-
-	volumeChoices := func() *gtk.ComboBoxText {
-		combo, _ := gtk.ComboBoxTextNew()
-		combo.Append("50", "50%")
-		combo.Append("75", "75%")
-		combo.Append("100", "100% (default)")
-		combo.Append("150", "150%")
-		combo.Append("200", "200%")
-		combo.SetActiveID("100")
-		combo.SetName("hsr-combo")
-		combo.SetSizeRequest(250, 36)
-
-		return combo
-	}
-
-	lblMicVol := makeIconLabel(
-		"audio-input-microphone",
-		"Mic Volume:",
-	)
-
-	comboMicVol := volumeChoices()
-
-	advancedGrid.Attach(lblMicVol, 0, 2, 1, 1)
-	advancedGrid.Attach(comboMicVol, 1, 2, 1, 1)
-
-	lblSysVol := makeIconLabel(
-		"audio-volume-high",
-		"System Volume:",
-	)
-
-	comboSysVol := volumeChoices()
-
-	advancedGrid.Attach(lblSysVol, 2, 2, 1, 1)
-	advancedGrid.Attach(comboSysVol, 3, 2, 1, 1)
-
-	chkDenoise, _ := gtk.CheckButtonNewWithLabel(
-		"Reduce microphone noise",
-	)
-
-	chkDenoise.SetName("hsr-check")
-
-	if ffmpegHasFilter("afftdn") {
-		chkDenoise.SetTooltipText(
-			"High-pass filter + FFT noise reduction on the microphone",
-		)
-	} else {
-		chkDenoise.SetSensitive(false)
-		chkDenoise.SetTooltipText(
-			"Your FFmpeg build has no 'afftdn' filter",
-		)
-	}
-
-	advancedGrid.Attach(chkDenoise, 0, 3, 2, 1)
-
-	chkSeparate, _ := gtk.CheckButtonNewWithLabel(
-		"Keep microphone and system audio as separate tracks",
-	)
-
-	chkSeparate.SetName("hsr-check")
-	chkSeparate.SetTooltipText(
-		"Only when both are recorded. Useful for editing afterwards; " +
-			"some players play only the first track.",
-	)
-
-	advancedGrid.Attach(chkSeparate, 2, 3, 2, 1)
-
-	advancedExpander.Add(advancedGrid)
-
-	advancedPanel.PackStart(
-		advancedExpander,
-		false,
-		false,
-		0,
-	)
-
-	mainBox.PackStart(
-		advancedPanel,
-		false,
-		false,
-		0,
-	)
-
 	/* =========================
 	   AUDIO
 	========================= */
@@ -700,12 +565,8 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	audioPanel.SetName("hsr-panel")
 
-	audioTitle, _ := gtk.LabelNew("Audio")
-	audioTitle.SetName("hsr-section")
-	audioTitle.SetHAlign(gtk.ALIGN_START)
-
 	audioPanel.PackStart(
-		audioTitle,
+		makeSectionTitle("Audio"),
 		false,
 		false,
 		0,
@@ -890,32 +751,277 @@ func InitUI() (*AppUI, *gtk.Window) {
 		)
 	}
 
-	mainBox.PackStart(
-		audioPanel,
+	pageRecord.PackStart(videoPanel, false, false, 0)
+	pageRecord.PackStart(audioPanel, false, false, 0)
+
+	/* =========================
+	   ADVANCED TAB
+	   Panel 1: quality + limits
+	   Panel 2: audio levels + processing
+	========================= */
+
+	qualityPanel, _ := gtk.BoxNew(
+		gtk.ORIENTATION_VERTICAL,
+		10,
+	)
+
+	qualityPanel.SetName("hsr-panel")
+
+	qualityPanel.PackStart(
+		makeSectionTitle("Quality & Limits"),
 		false,
 		false,
 		0,
 	)
 
+	qualityGrid, _ := gtk.GridNew()
+
+	qualityGrid.SetRowSpacing(10)
+	qualityGrid.SetColumnSpacing(14)
+
+	/* QUALITY */
+
+	lblQuality := makeIconLabel(
+		"preferences-system",
+		"Quality:",
+	)
+
+	comboQuality, _ := gtk.ComboBoxTextNew()
+	comboQuality.Append("high", "High (larger files)")
+	comboQuality.Append("standard", "Standard (recommended)")
+	comboQuality.Append("small", "Small files (lower quality)")
+	comboQuality.SetActiveID("standard")
+	comboQuality.SetName("hsr-combo")
+	comboQuality.SetSizeRequest(250, 36)
+
+	qualityGrid.Attach(lblQuality, 0, 0, 1, 1)
+	qualityGrid.Attach(comboQuality, 1, 0, 1, 1)
+
+	/* BITRATE */
+
+	lblBitrate := makeIconLabel(
+		"utilities-system-monitor",
+		"Bitrate:",
+	)
+
+	comboBitrate, _ := gtk.ComboBoxTextNew()
+	comboBitrate.Append("0", "Auto (by quality)")
+	comboBitrate.Append("2000", "2 Mbps (low)")
+	comboBitrate.Append("4000", "4 Mbps (medium)")
+	comboBitrate.Append("8000", "8 Mbps (high)")
+	comboBitrate.Append("12000", "12 Mbps (very high)")
+	comboBitrate.Append("20000", "20 Mbps (maximum)")
+	comboBitrate.SetActiveID("0")
+	comboBitrate.SetName("hsr-combo")
+	comboBitrate.SetSizeRequest(250, 36)
+	comboBitrate.SetTooltipText(
+		"A fixed bitrate overrides the quality level",
+	)
+
+	// The quality level has no effect while a fixed bitrate is chosen.
+	comboBitrate.Connect("changed", func() {
+		comboQuality.SetSensitive(
+			comboBitrate.GetActiveID() == "0",
+		)
+	})
+
+	qualityGrid.Attach(lblBitrate, 2, 0, 1, 1)
+	qualityGrid.Attach(comboBitrate, 3, 0, 1, 1)
+
+	/* AUTO-STOP: TIME */
+
+	lblStopAfter := makeIconLabel(
+		"alarm",
+		"Stop After:",
+	)
+
+	comboAutoStop, _ := gtk.ComboBoxTextNew()
+	comboAutoStop.Append("0", "No limit")
+	comboAutoStop.Append("5", "5 minutes")
+	comboAutoStop.Append("10", "10 minutes")
+	comboAutoStop.Append("15", "15 minutes")
+	comboAutoStop.Append("30", "30 minutes")
+	comboAutoStop.Append("60", "1 hour")
+	comboAutoStop.Append("120", "2 hours")
+	comboAutoStop.SetActiveID("0")
+	comboAutoStop.SetName("hsr-combo")
+	comboAutoStop.SetSizeRequest(250, 36)
+
+	qualityGrid.Attach(lblStopAfter, 0, 1, 1, 1)
+	qualityGrid.Attach(comboAutoStop, 1, 1, 1, 1)
+
+	/* AUTO-STOP: DISK SPACE */
+
+	lblDiskGuard := makeIconLabel(
+		"drive-harddisk",
+		"Low Disk Guard:",
+	)
+
+	comboDiskGuard, _ := gtk.ComboBoxTextNew()
+	comboDiskGuard.Append("0", "Off")
+	comboDiskGuard.Append("500", "Keep 500 MB free")
+	comboDiskGuard.Append("1024", "Keep 1 GB free")
+	comboDiskGuard.Append("2048", "Keep 2 GB free")
+	comboDiskGuard.Append("5120", "Keep 5 GB free")
+	comboDiskGuard.SetActiveID("1024")
+	comboDiskGuard.SetName("hsr-combo")
+	comboDiskGuard.SetSizeRequest(250, 36)
+	comboDiskGuard.SetTooltipText(
+		"Stops and saves the recording while there is still enough free " +
+			"space to finish saving it",
+	)
+
+	qualityGrid.Attach(lblDiskGuard, 2, 1, 1, 1)
+	qualityGrid.Attach(comboDiskGuard, 3, 1, 1, 1)
+
+	qualityPanel.PackStart(
+		qualityGrid,
+		false,
+		false,
+		0,
+	)
+
+	/* AUDIO LEVELS + PROCESSING */
+
+	audioFxPanel, _ := gtk.BoxNew(
+		gtk.ORIENTATION_VERTICAL,
+		10,
+	)
+
+	audioFxPanel.SetName("hsr-panel")
+
+	audioFxPanel.PackStart(
+		makeSectionTitle("Audio Levels & Processing"),
+		false,
+		false,
+		0,
+	)
+
+	audioFxGrid, _ := gtk.GridNew()
+
+	audioFxGrid.SetRowSpacing(10)
+	audioFxGrid.SetColumnSpacing(14)
+
+	volumeChoices := func() *gtk.ComboBoxText {
+		combo, _ := gtk.ComboBoxTextNew()
+		combo.Append("50", "50%")
+		combo.Append("75", "75%")
+		combo.Append("100", "100% (default)")
+		combo.Append("150", "150%")
+		combo.Append("200", "200%")
+		combo.SetActiveID("100")
+		combo.SetName("hsr-combo")
+		combo.SetSizeRequest(250, 36)
+
+		return combo
+	}
+
+	lblMicVol := makeIconLabel(
+		"audio-input-microphone",
+		"Mic Volume:",
+	)
+
+	comboMicVol := volumeChoices()
+
+	audioFxGrid.Attach(lblMicVol, 0, 0, 1, 1)
+	audioFxGrid.Attach(comboMicVol, 1, 0, 1, 1)
+
+	lblSysVol := makeIconLabel(
+		"audio-volume-high",
+		"System Volume:",
+	)
+
+	comboSysVol := volumeChoices()
+
+	audioFxGrid.Attach(lblSysVol, 2, 0, 1, 1)
+	audioFxGrid.Attach(comboSysVol, 3, 0, 1, 1)
+
+	chkDenoise, _ := gtk.CheckButtonNewWithLabel(
+		"Reduce microphone noise",
+	)
+
+	chkDenoise.SetName("hsr-check")
+
+	if ffmpegHasFilter("afftdn") {
+		chkDenoise.SetTooltipText(
+			"High-pass filter + FFT noise reduction on the microphone",
+		)
+	} else {
+		chkDenoise.SetSensitive(false)
+		chkDenoise.SetTooltipText(
+			"Your FFmpeg build has no 'afftdn' filter",
+		)
+	}
+
+	audioFxGrid.Attach(chkDenoise, 0, 1, 2, 1)
+
+	chkSeparate, _ := gtk.CheckButtonNewWithLabel(
+		"Keep microphone and system audio as separate tracks",
+	)
+
+	chkSeparate.SetName("hsr-check")
+	chkSeparate.SetTooltipText(
+		"Only when both are recorded. Useful for editing afterwards; " +
+			"some players play only the first track.",
+	)
+
+	audioFxGrid.Attach(chkSeparate, 2, 1, 2, 1)
+
+	audioFxPanel.PackStart(
+		audioFxGrid,
+		false,
+		false,
+		0,
+	)
+
+	pageAdvanced.PackStart(qualityPanel, false, false, 0)
+	pageAdvanced.PackStart(audioFxPanel, false, false, 0)
+
 	/* =========================
-	   OPTIONS + WEBCAM
+	   OPTIONS TAB (BEHAVIOR + WEBCAM)
 	========================= */
 
 	optionsPanel, _ := gtk.BoxNew(
-		gtk.ORIENTATION_HORIZONTAL,
-		20,
+		gtk.ORIENTATION_VERTICAL,
+		12,
 	)
 
 	optionsPanel.SetName("hsr-panel")
 
+	optionsPanel.PackStart(
+		makeSectionTitle("Recording Options"),
+		false,
+		false,
+		0,
+	)
+
+	optionsRow, _ := gtk.BoxNew(
+		gtk.ORIENTATION_HORIZONTAL,
+		30,
+	)
+
 	leftBox, _ := gtk.BoxNew(
 		gtk.ORIENTATION_VERTICAL,
-		7,
+		9,
 	)
 
 	rightBox, _ := gtk.BoxNew(
 		gtk.ORIENTATION_VERTICAL,
-		7,
+		9,
+	)
+
+	leftBox.PackStart(
+		makeSubTitle("Behavior & Effects"),
+		false,
+		false,
+		0,
+	)
+
+	rightBox.PackStart(
+		makeSubTitle("Webcam"),
+		false,
+		false,
+		0,
 	)
 
 	chkMinimize, _ := gtk.CheckButtonNewWithLabel(
@@ -1093,17 +1199,24 @@ func InitUI() (*AppUI, *gtk.Window) {
 		0,
 	)
 
-	optionsPanel.PackStart(
+	optionsRow.PackStart(
 		leftBox,
 		true,
 		true,
 		0,
 	)
 
-	optionsPanel.PackStart(
+	optionsRow.PackStart(
 		rightBox,
 		true,
 		true,
+		0,
+	)
+
+	optionsPanel.PackStart(
+		optionsRow,
+		false,
+		false,
 		0,
 	)
 
@@ -1124,10 +1237,31 @@ func InitUI() (*AppUI, *gtk.Window) {
 		})
 	}
 
+	pageOptions.PackStart(optionsPanel, false, false, 0)
+
+	/* =========================
+	   ASSEMBLE THE NOTEBOOK
+	========================= */
+
+	notebook.AppendPage(
+		pageRecord,
+		makeTabLabel("media-record", "Record"),
+	)
+
+	notebook.AppendPage(
+		pageAdvanced,
+		makeTabLabel("preferences-system", "Advanced"),
+	)
+
+	notebook.AppendPage(
+		pageOptions,
+		makeTabLabel("preferences-other", "Options"),
+	)
+
 	mainBox.PackStart(
-		optionsPanel,
-		false,
-		false,
+		notebook,
+		true,
+		true,
 		0,
 	)
 
@@ -1206,6 +1340,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 	)
 
 	btnScreenshot, _ := gtk.ButtonNewWithLabel("Screenshot")
+	btnScreenshot.SetName("hsr-screenshot")
 	btnScreenshot.SetTooltipText(
 		"Save a PNG of the selected screen, area, window or monitor",
 	)
@@ -1476,6 +1611,10 @@ func showHelpDialog(parent *gtk.Window) {
 			"Ctrl + Q: Stop and save\n"+
 			"Ctrl + G: Toggle Magnifier\n"+
 			"Ctrl + T: Mouse Effect\n\n"+
+			"Tabs:\n"+
+			"- Record: video and audio sources.\n"+
+			"- Advanced: quality, bitrate, limits, volume and noise.\n"+
+			"- Options: behavior, cursor effects and webcam.\n\n"+
 			"Features:\n"+
 			"- Multiple video formats (MP4, MKV, WebM, GIF).\n"+
 			"- Hardware encoding (VAAPI / NVENC) when available.\n"+
@@ -1515,7 +1654,7 @@ func showAboutDialog(
 		"Helwan Screen Recorder",
 	)
 
-	dialog.SetVersion("1.3.0-1")
+	dialog.SetVersion("1.3.0-2")
 
 	dialog.SetComments(
 		"Screen and audio recorder for Helwan Linux.",

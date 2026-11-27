@@ -1812,17 +1812,39 @@ func mergeAudioPartsToFile(parts []string, outputFile string) error {
 	})
 }
 
+// audioSyncOffset returns the audio shift in seconds.
+// Negative = audio earlier, positive = audio later.
+// Set with the HSR_AUDIO_OFFSET_MS environment variable.
+func audioSyncOffset() float64 {
+	ms, err := strconv.Atoi(os.Getenv("HSR_AUDIO_OFFSET_MS"))
+	if err != nil {
+		return 0
+	}
+	return float64(ms) / 1000
+}
+
 func muxVideoAudio(videoFile, audioFile, outputFile string) error {
 	args := []string{
 		"-y",
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", videoFile,
+	}
+
+	off := audioSyncOffset()
+	switch {
+	case off < 0:
+		args = append(args, "-ss", fmt.Sprintf("%.3f", -off))
+	case off > 0:
+		args = append(args, "-itsoffset", fmt.Sprintf("%.3f", off))
+	}
+
+	args = append(args,
 		"-i", audioFile,
 		"-map", "0:v:0",
 		"-map", "1:a",
 		"-c", "copy",
-	}
+	)
 
 	switch strings.ToLower(filepath.Ext(outputFile)) {
 	case ".mp4":
