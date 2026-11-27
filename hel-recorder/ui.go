@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/gotk3/gotk3/gdk"
@@ -1194,6 +1195,50 @@ func InitUI() (*AppUI, *gtk.Window) {
 
 	rightBox.PackStart(
 		cameraRow,
+		false,
+		false,
+		0,
+	)
+
+	chkMagnifier, _ := gtk.CheckButtonNewWithLabel(
+		"Magnifier (Ctrl+G)",
+	)
+
+	chkMagnifier.SetName("hsr-check")
+	chkMagnifier.SetTooltipText(
+		"Enable or disable the KMag magnifier.",
+	)
+
+	var magnifierCmd *exec.Cmd
+	chkMagnifier.Connect("toggled", func() {
+		if chkMagnifier.GetActive() {
+			if magnifierCmd != nil && magnifierCmd.Process != nil {
+				return
+			}
+
+			path, err := exec.LookPath("kmag")
+			if err != nil {
+				chkMagnifier.SetActive(false)
+				return
+			}
+
+			cmd := exec.Command(path)
+			if err := cmd.Start(); err != nil {
+				chkMagnifier.SetActive(false)
+				return
+			}
+			magnifierCmd = cmd
+			return
+		}
+
+		if magnifierCmd != nil && magnifierCmd.Process != nil {
+			_ = magnifierCmd.Process.Kill()
+		}
+		magnifierCmd = nil
+	})
+
+	rightBox.PackStart(
+		chkMagnifier,
 		false,
 		false,
 		0,
