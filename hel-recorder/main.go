@@ -70,6 +70,7 @@ func main() {
 	SetupTray(manager, ui, quit)
 
 	manager.connectMouseEffectsCheckbox()
+	manager.connectMagnifierCheckbox()
 	ui.BtnScreenshot.Connect("clicked", manager.TakeScreenshot)
 
 	// A terminal Ctrl+C, "kill" or a desktop shutdown must stop the recording

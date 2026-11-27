@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/gotk3/gotk3/gdk"
@@ -33,6 +32,7 @@ type AppUI struct {
 	ChkWebcam        *gtk.CheckButton
 	ChkCursor        *gtk.CheckButton
 	ChkMouseFx       *gtk.CheckButton
+	ChkMagnifier     *gtk.CheckButton
 	ChkDenoise       *gtk.CheckButton
 	ChkSeparate      *gtk.CheckButton
 	ComboMicVol      *gtk.ComboBoxText
@@ -1200,42 +1200,28 @@ func InitUI() (*AppUI, *gtk.Window) {
 		0,
 	)
 
+	rightBox.PackStart(
+		makeSubTitle("Magnifier"),
+		false,
+		false,
+		6,
+	)
+
 	chkMagnifier, _ := gtk.CheckButtonNewWithLabel(
 		"Magnifier (Ctrl+G)",
 	)
 
 	chkMagnifier.SetName("hsr-check")
 	chkMagnifier.SetTooltipText(
-		"Enable or disable the KMag magnifier.",
+		"Opens the KMag screen magnifier. Same as pressing Ctrl+G.",
 	)
 
-	var magnifierCmd *exec.Cmd
-	chkMagnifier.Connect("toggled", func() {
-		if chkMagnifier.GetActive() {
-			if magnifierCmd != nil && magnifierCmd.Process != nil {
-				return
-			}
-
-			path, err := exec.LookPath("kmag")
-			if err != nil {
-				chkMagnifier.SetActive(false)
-				return
-			}
-
-			cmd := exec.Command(path)
-			if err := cmd.Start(); err != nil {
-				chkMagnifier.SetActive(false)
-				return
-			}
-			magnifierCmd = cmd
-			return
-		}
-
-		if magnifierCmd != nil && magnifierCmd.Process != nil {
-			_ = magnifierCmd.Process.Kill()
-		}
-		magnifierCmd = nil
-	})
+	if !hasCommand("kmag") {
+		chkMagnifier.SetSensitive(false)
+		chkMagnifier.SetTooltipText(
+			"Install 'kmag' to use the magnifier",
+		)
+	}
 
 	rightBox.PackStart(
 		chkMagnifier,
@@ -1503,6 +1489,7 @@ func InitUI() (*AppUI, *gtk.Window) {
 		ChkWebcam:        chkWebcam,
 		ChkCursor:        chkCursor,
 		ChkMouseFx:       chkMouseFx,
+		ChkMagnifier:     chkMagnifier,
 		ChkDenoise:       chkDenoise,
 		ChkSeparate:      chkSeparate,
 		ComboMicVol:      comboMicVol,
@@ -1699,7 +1686,7 @@ func showAboutDialog(
 		"Helwan Screen Recorder",
 	)
 
-	dialog.SetVersion("1.3.0-2")
+	dialog.SetVersion("1.3.0-3")
 
 	dialog.SetComments(
 		"Screen and audio recorder for Helwan Linux.",

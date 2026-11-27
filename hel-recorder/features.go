@@ -391,7 +391,51 @@ func (m *RecorderManager) cancelCountdownLocked() {
 
 // Magnifier - KMag
 
+var syncingMagnifierCheckbox bool
+
+// syncMagnifierCheckbox makes the checkbox reflect the real magnifier state
+// (it can also change with Ctrl+G, or when KMag is closed by hand).
+func (m *RecorderManager) syncMagnifierCheckbox() {
+	glib.IdleAdd(func() {
+		if m.ui == nil || m.ui.ChkMagnifier == nil {
+			return
+		}
+
+		m.mu.Lock()
+		running := m.magnifierCmd != nil
+		m.mu.Unlock()
+
+		syncingMagnifierCheckbox = true
+		m.ui.ChkMagnifier.SetActive(running)
+		syncingMagnifierCheckbox = false
+	})
+}
+
+// connectMagnifierCheckbox wires the checkbox to the magnifier.
+// The Ctrl+G shortcut is unchanged and keeps working.
+func (m *RecorderManager) connectMagnifierCheckbox() {
+	if m.ui.ChkMagnifier == nil {
+		return
+	}
+
+	m.ui.ChkMagnifier.Connect("toggled", func() {
+		if syncingMagnifierCheckbox {
+			return
+		}
+
+		m.mu.Lock()
+		running := m.magnifierCmd != nil
+		m.mu.Unlock()
+
+		if m.ui.ChkMagnifier.GetActive() != running {
+			m.ToggleMagnifier()
+		}
+	})
+}
+
 func (m *RecorderManager) ToggleMagnifier() {
+	defer m.syncMagnifierCheckbox()
+
 	m.mu.Lock()
 
 	if m.magnifierCmd != nil {
@@ -435,6 +479,8 @@ func (m *RecorderManager) ToggleMagnifier() {
 			m.setStatus("Status: Magnifier disabled")
 		}
 		m.mu.Unlock()
+
+		m.syncMagnifierCheckbox()
 	}()
 }
 
