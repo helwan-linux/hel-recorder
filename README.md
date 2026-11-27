@@ -4,127 +4,90 @@
 
 # Helwan Screen Recorder
 
-**A simple, lightweight, and practical screen and audio recorder for Linux.**
+**A simple, lightweight, and practical screen and audio recorder for Linux/X11.**
 
 </div>
 
-# Helwan Screen Recorder
+Helwan Screen Recorder (HSR) is a GTK3 desktop application written in **Go** for recording the desktop, microphone, system audio, and webcam on **Linux/X11**.
 
-Helwan Screen Recorder is a GTK3 desktop application written in **Go** for recording the desktop, microphone, system audio, and webcam on **Linux/X11**.
-
-It is designed around a simple idea:
+It is built around a simple idea:
 
 > **Press Record. Capture what you need. Pause when you want. Save a clean recording.**
 
-Helwan Screen Recorder uses **FFmpeg** for capture, encoding, audio processing, and finalization while providing a simple GTK3 interface without the complexity of a full production-oriented recording suite.
+HSR uses **FFmpeg** for capture, encoding, audio processing, and finalization while keeping the interface focused on practical recording work.
 
----
+## Current Status
+
+**Package version: 1.3.0-2**
+
+The current implementation has moved well beyond basic screen capture. It now includes a complete recording workflow with separate video/audio pipelines, hardware-encoder probing, segment-based Pause/Resume, crash-recovery support, webcam PiP, mouse effects, keystroke display, screenshots, recording OSD, global X11 shortcuts, automatic stop, and low-disk-space protection.
+
+The project is currently **Linux/X11 focused**. Wayland is not the target of the present capture architecture.
 
 ## Features
 
 ### Screen Recording
 
-- Full-screen recording at the native X11 desktop resolution.
-- Custom recording-area selection using `slop`.
-- Window selection using `slop`.
-- Monitor selection when multiple X11 monitors are available.
+- Full-screen X11 recording.
+- Monitor selection.
+- Window selection through `slop`.
+- Custom recording-area selection through `slop`.
 - 30 FPS or 60 FPS.
-- X11 screen capture through FFmpeg `x11grab`.
-- Automatic desktop-resolution detection using `xrandr`.
-- `xdpyinfo` fallback when `xrandr` cannot provide the resolution.
-- Automatic validation of the selected recording resolution.
-- Mouse cursor capture.
+- Automatic desktop-resolution detection through `xrandr`.
+- `xdpyinfo` fallback for native resolution detection.
+- Validation of the selected recording dimensions.
+- Optional mouse-cursor capture.
+- FFmpeg `x11grab` capture.
 
 ### Audio Recording
 
 - Microphone recording.
-- System audio recording.
-- Microphone + system audio recording at the same time.
-- Selection of the microphone source.
-- Selection of the system-audio monitor source.
-- PulseAudio-compatible source detection through `pactl`.
-- Automatic microphone mute detection.
-- Option to unmute a muted microphone before recording.
-- Separate microphone and system-audio inputs.
-- Automatic mixing of microphone and system audio.
+- System-audio recording.
+- Microphone + system audio simultaneously.
+- Microphone source selection.
+- System-audio monitor-source selection.
+- PulseAudio-compatible source discovery through `pactl`.
+- Microphone mute detection.
+- Optional microphone unmute before recording.
+- Independent microphone and system-audio inputs.
+- Mixed audio mode.
+- Separate microphone/system-audio tracks.
+- Independent microphone volume.
+- Independent system-audio volume.
+- Optional microphone noise reduction when FFmpeg provides `afftdn`.
 - AAC audio for MP4/MKV.
 - Opus audio for WebM.
 - 192 kbps audio encoding.
-- Independent audio processing from the video recording process.
 
----
+### Audio Architecture
 
-## Reliable Audio Recording
-
-Audio reliability is an important part of Helwan Screen Recorder.
-
-The recorder:
-
-- Detects available PulseAudio-compatible sources.
-- Clearly separates microphone and system-audio sources.
-- Detects muted microphones before recording.
-- Can restore microphone input when required.
-- Keeps microphone and system audio as separate FFmpeg inputs.
-- Mixes both sources only when both are enabled.
-- Stops audio processing cleanly when recording is paused or stopped.
-- Preserves recorded audio parts for final merging.
-
-The goal is to avoid silent recordings and unexpected audio interruptions caused by an incorrectly selected or muted input.
-
----
-
-## Low-Lag Recording Architecture
-
-Helwan Screen Recorder is designed to reduce unnecessary interaction between the video and audio pipelines.
-
-### Separate Video and Audio Processes
-
-When audio is enabled, the recorder uses:
+When audio is enabled, video and audio are recorded by separate FFmpeg processes:
 
 ```text
 X11 Screen ───────────────► FFmpeg Video
                                   │
                                   ▼
-                           Video Recording Part
-
+                           Video Part
 
 Microphone ────────┐
                    ├────────────► FFmpeg Audio
 System Audio ──────┘
                                   │
                                   ▼
-                           Audio Recording Part
+                           Audio Part
 ```
 
-The video FFmpeg process does not wait for PulseAudio processing or audio filters.
+This keeps the video capture path independent from PulseAudio processing and audio filters.
 
-This separation helps prevent audio processing from unnecessarily blocking the video capture pipeline.
+When both sources are enabled, HSR can mix them with FFmpeg `amix`. When separate-track mode is selected, microphone and system audio remain separate streams for later editing.
 
-### Input Queue Detection
+The application also checks whether the installed FFmpeg supports `-thread_queue_size` before adding that option to capture commands.
 
-The recorder checks whether the installed FFmpeg version supports:
+### Hardware Acceleration
 
-```text
--thread_queue_size
-```
+HSR probes hardware encoders before using them instead of assuming that a GPU encoder is available.
 
-before using it.
-
-If the option is not supported by the installed FFmpeg build, the recorder automatically avoids using it instead of starting with an invalid command.
-
-### Hardware Encoder Detection
-
-Hardware acceleration is tested before it is used.
-
-The recorder performs an actual FFmpeg encoding test rather than assuming that a GPU encoder is available.
-
----
-
-## Hardware Acceleration
-
-Helwan Screen Recorder automatically detects usable hardware H.264 encoders.
-
-The detection order is:
+The selection order is:
 
 ```text
 VAAPI
@@ -140,67 +103,35 @@ CPU
   └── libx264 fallback
 ```
 
-### VAAPI
+#### VAAPI
 
-The recorder searches for available DRM render devices:
+The recorder searches for usable DRM render devices under:
 
 ```text
 /dev/dri/renderD*
 ```
 
-Each candidate is tested using FFmpeg before being selected.
+Each candidate is tested with FFmpeg. When successful, `h264_vaapi` is selected.
 
-When a working VAAPI encoder is found:
+HSR also tests the required pixel-format conversion path and can use GPU-side conversion when supported.
 
-```text
-h264_vaapi
-```
+#### NVENC
 
-is used.
+On NVIDIA systems, HSR checks for NVIDIA device support and performs an actual `h264_nvenc` encoding test before selecting it.
 
-The recorder also tests the available pixel-format conversion path and can use GPU-side conversion when supported.
+#### CPU fallback
 
-### NVENC
+If no working hardware encoder is available, HSR automatically uses `libx264` with a low-latency configuration.
 
-On NVIDIA systems, the recorder checks for:
+### Quality and Bitrate
 
-```text
-/dev/nvidiactl
-```
-
-and performs an actual `h264_nvenc` encoding test.
-
-When usable:
-
-```text
-h264_nvenc
-```
-
-is selected.
-
-### CPU Fallback
-
-If no working hardware encoder is detected, the recorder automatically uses:
-
-```text
-libx264
-```
-
-with a low-latency configuration.
-
-The application therefore does not simply assume that hardware encoding works.
-
----
-
-## Quality and Bitrate
-
-The Advanced panel provides three quality levels:
+The Advanced panel provides:
 
 - **High** — better quality, larger files.
 - **Standard** — recommended default.
 - **Small** — smaller files, lower quality.
 
-A fixed bitrate can also be selected:
+Fixed bitrate options:
 
 - Auto
 - 2 Mbps
@@ -209,73 +140,67 @@ A fixed bitrate can also be selected:
 - 12 Mbps
 - 20 Mbps
 
-When a fixed bitrate is selected, it overrides the quality-level setting.
+A fixed bitrate overrides the quality-level setting.
 
----
+### Recording Formats
 
-## Recording Formats
-
-### MP4
+#### MP4
 
 - H.264 video.
 - AAC audio.
-- `faststart` enabled.
+- `+faststart` finalization.
 - Suitable for general playback and sharing.
 
-### MKV
+#### MKV
 
 - H.264 video.
 - AAC audio.
-- Designed to be more resilient during recording.
-- Useful when recording stability is more important than immediate MP4 compatibility.
+- Recorded through the safer Matroska intermediate path.
 
-### WebM
+#### WebM
 
 - VP9 video.
 - Opus audio.
 - Realtime-oriented VP9 settings.
 - Suitable for web-oriented recordings.
 
-### Animated GIF
+#### Animated GIF
 
 - 15 FPS.
 - Maximum output width of 720 pixels.
 - Automatic palette generation.
-- Palette-based conversion for improved GIF quality.
+- Palette-based conversion.
+- Audio disabled.
 - Intended for short clips.
-- Audio is disabled.
-
----
 
 ## Safe Recording Parts
 
-During recording, the application does not write directly to the final MP4 file.
+HSR deliberately does not write MP4 directly while recording.
 
-Instead, recording parts are created in the selected destination directory.
+MP4 and GIF sessions are recorded into temporary Matroska parts, while WebM sessions use WebM parts.
 
-For example:
+Example:
 
 ```text
 .hel_rec_part_123456789.mkv
 ```
 
-This provides a safer intermediate recording format.
+The temporary parts are stored beside the final recording rather than relying on `/tmp`. This reduces the risk of filling a RAM-backed `/tmp` filesystem and makes final file movement faster when the destination filesystem is unchanged.
 
-For MP4 output, the final file is created using stream-copy remuxing with:
+For MP4 finalization, HSR uses stream-copy remuxing:
 
 ```text
+-c copy
 -movflags +faststart
 ```
 
-The video is not unnecessarily re-encoded during MP4 finalization.
+The captured video is therefore not unnecessarily re-encoded during MP4 finalization.
 
-If finalization fails, the raw recording part is kept so that recorded footage is not silently lost.
-
----
+If finalization fails, the raw recording is retained as an MKV fallback instead of silently discarding the captured footage.
 
 ## Pause & Resume
 
-Helwan Screen Recorder uses a **segment-based Pause/Resume system**.
+HSR uses a **segment-based Pause/Resume system**.
 
 When recording is paused:
 
@@ -283,20 +208,42 @@ When recording is paused:
 2. The current video part is preserved.
 3. The current audio part is preserved when audio is enabled.
 4. Audio input is stopped cleanly.
-5. Recording remains in the paused state.
+5. Recording enters the paused state.
 6. Resume starts a new recording segment.
-7. Multiple segments can be created during one recording session.
-8. The segments are automatically merged when recording finishes.
+7. Multiple segments can be created during one session.
+8. The segments are merged automatically when recording finishes.
 
-The final result is presented as a single recording file.
+The final result is presented as one recording.
 
-This approach avoids depending on a fragile in-process FFmpeg pause mechanism.
+This approach avoids relying on a fragile in-process FFmpeg pause mechanism.
 
----
+## Crash / Power-Loss Recovery
+
+HSR keeps unfinished recording parts so that an interrupted recording can be recovered after an unexpected shutdown or crash.
+
+At startup, the recovery system can detect orphaned recording parts and offer recovery actions such as:
+
+```text
+Recover
+Delete
+Later
+```
+
+Recovery logic can:
+
+- Scan for unfinished recording parts.
+- Pair matching video/audio parts.
+- Recover video-only recordings when possible.
+- Recover audio-only material when possible.
+- Mux recovered video and audio when possible.
+- Preserve usable footage if audio recovery fails.
+- Avoid overwriting an existing recovered filename.
+
+The recovery logic is covered by dedicated Go tests.
 
 ## Webcam Overlay
 
-Helwan Screen Recorder supports a webcam **PiP overlay**.
+HSR supports a webcam **Picture-in-Picture (PiP)** overlay.
 
 Enable:
 
@@ -319,19 +266,36 @@ Available positions:
 - Top-Right
 - Top-Left
 
-The recorder automatically detects a usable V4L2 webcam under:
+The recorder detects usable V4L2 webcam devices under:
 
 ```text
 /dev/video*
 ```
 
-It prefers the primary capture device when multiple video nodes are present.
+If the webcam supports MJPEG, HSR can use MJPEG input to reduce unnecessary camera-side processing.
 
-If the webcam supports MJPEG, the recorder can use MJPEG input to reduce unnecessary camera-side processing.
+The webcam is part of the recorded video; it is not a separate floating desktop window.
 
-The webcam overlay is not a separate floating window and is not simply captured from the desktop.
+## Mouse Cursor & Mouse Effects
 
----
+HSR can capture the normal mouse cursor.
+
+It also provides optional **Mouse Click Effects**.
+
+When enabled, the recorder uses a transparent X11 overlay to show:
+
+- A cursor halo.
+- A visible click ring when a mouse button is pressed.
+
+Toggle:
+
+```text
+Ctrl + T
+```
+
+The mouse-effects checkbox remains synchronized with the real effect state.
+
+Mouse effects require a composited X11 desktop with support for transparent RGBA windows.
 
 ## Keystroke Display
 
@@ -343,20 +307,20 @@ Enable:
 Show Keystrokes on screen
 ```
 
-This is useful for:
+Useful for:
 
-- Tutorials
-- Programming videos
-- Software demonstrations
-- Linux tutorials
-- Educational recordings
-- Keyboard-driven workflows
+- Tutorials.
+- Programming videos.
+- Software demonstrations.
+- Linux tutorials.
+- Educational recordings.
+- Keyboard-driven workflows.
 
----
+Screenkey is started only when the feature is enabled for the recording.
 
 ## Floating Recording OSD
 
-During recording, Helwan Screen Recorder provides a floating status control.
+During recording, HSR provides a floating status control.
 
 Example:
 
@@ -372,107 +336,90 @@ While paused:
 
 The OSD provides quick access to:
 
-- Pause / Resume
-- Stop
-
-The OSD can remain available while the main application window is minimized or hidden.
+- Pause / Resume.
+- Stop.
 
 Its position is remembered for later recording sessions.
 
----
-
 ## System Tray
 
-Helwan Screen Recorder provides a system-tray control when supported by the desktop environment.
+HSR provides system-tray controls when supported by the desktop environment.
 
-The tray menu can provide:
+The tray can provide:
 
-- Show Window
-- Start Recording
-- Pause / Resume
-- Stop and Save
-- Quit
+- Show Window.
+- Start Recording.
+- Pause / Resume.
+- Stop and Save.
+- Quit.
 
-The tray state changes according to the current recording state.
+The implementation supports traditional GTK status icons and compatible AppIndicator libraries when available.
 
-For example:
+## Screenshot
+
+HSR includes a screenshot function in the main interface.
+
+The screenshot workflow supports:
+
+- Full screen.
+- Selected area.
+- Selected window.
+- Selected monitor.
+
+Screenshots are saved as PNG files with timestamped names such as:
 
 ```text
-Ready
-  ↓
-Recording
-  ↓
-Paused
+Screenshot_2026-11-27_09-30-15.png
 ```
-
-The application supports both traditional GTK status icons and compatible AppIndicator libraries when available.
-
----
 
 ## Countdown
 
 Recording can start after an optional countdown:
 
-- No Countdown
-- 3 seconds
-- 5 seconds
-- 10 seconds
+- No Countdown.
+- 3 seconds.
+- 5 seconds.
+- 10 seconds.
 
-The countdown is displayed in a large on-screen window.
-
-The countdown can be cancelled before recording begins.
-
----
+The countdown appears in a large on-screen window and can be cancelled before recording starts.
 
 ## Automatic Minimize
 
-Helwan Screen Recorder can automatically minimize its main window when recording starts.
+HSR can automatically minimize its main window when recording starts.
 
-This prevents the recorder's own interface from appearing in the captured desktop.
+This keeps the recorder interface out of the captured desktop.
 
 The main window is restored when recording finishes.
 
----
-
 ## Automatic Stop
 
-The Advanced panel provides optional automatic recording limits:
+The Advanced panel provides optional recording limits:
 
-- No limit
-- 5 minutes
-- 10 minutes
-- 15 minutes
-- 30 minutes
-- 1 hour
-- 2 hours
+- No limit.
+- 5 minutes.
+- 10 minutes.
+- 15 minutes.
+- 30 minutes.
+- 1 hour.
+- 2 hours.
 
-When the selected limit is reached, the recorder automatically follows the normal stop-and-save workflow.
+When the selected limit is reached, HSR follows the normal stop-and-save workflow.
 
----
+## Low-Disk-Space Protection
 
-## Low Disk Space Protection
-
-Helwan Screen Recorder can monitor available disk space during recording.
+HSR can monitor available disk space during recording.
 
 Available settings:
 
-- Off
-- Keep 500 MB free
-- Keep 1 GB free
-- Keep 2 GB free
-- Keep 5 GB free
+- Off.
+- Keep 500 MB free.
+- Keep 1 GB free.
+- Keep 2 GB free.
+- Keep 5 GB free.
 
-The disk guard is designed around the actual temporary recording files.
+The disk guard considers the free-space margin together with the space already occupied by the recording because finalization can require additional temporary space.
 
-Because finalization may require additional space, the recorder considers both:
-
-```text
-Required free-space margin
-+
-Space already occupied by the recording
-```
-
-When the available space becomes too low, the recorder automatically stops and saves the recording instead of continuing until the filesystem is full.
+When available space becomes too low, HSR automatically stops through the normal save workflow instead of continuing until the filesystem is full.
 
 The default setting is:
 
@@ -480,51 +427,37 @@ The default setting is:
 Keep 1 GB free
 ```
 
----
-
 ## Global Keyboard Shortcuts
 
-The recorder provides global X11 keyboard shortcuts.
+HSR provides global X11 keyboard shortcuts:
 
 | Shortcut | Action |
 |---|---|
 | `Ctrl + R` | Start recording |
 | `Ctrl + E` | Pause / Resume |
 | `Ctrl + Q` | Stop and save |
-| `Ctrl + G` | Toggle magnifier |
-| `Ctrl + T` | Mouse Effect  |
+| `Ctrl + G` | Toggle KMag |
+| `Ctrl + T` | Toggle Mouse Effects |
 
-These shortcuts work outside the main application window.
+The shortcuts work outside the main application window.
 
-They are implemented directly through X11 global key grabs.
+The X11 hotkey implementation accounts for:
 
-The hotkey handling also accounts for:
-
-- Caps Lock
-- Num Lock
-- Different keyboard layouts
-
-The shortcuts are matched using X11 keycodes, so they continue to work when the active keyboard layout changes.
-
----
+- Caps Lock.
+- Num Lock.
+- Different keyboard layouts.
 
 ## Magnifier
 
 `Ctrl + G` launches or closes **KMag**.
 
-This can be useful when demonstrating:
+This is useful for demonstrations involving small UI elements, settings, terminal commands, accessibility features, or detailed interface operations.
 
-- Small UI elements
-- Desktop settings
-- Terminal commands
-- Accessibility features
-- Detailed interface operations
-
----
+KMag remains an external application rather than being embedded into HSR.
 
 ## Recording Workflow
 
-A typical recording session looks like this:
+A typical session looks like this:
 
 ```text
 Launch Helwan Screen Recorder
@@ -545,7 +478,10 @@ Select quality / bitrate
 Select microphone / system audio
           │
           ▼
-Optional webcam / keystrokes
+Optional volume / denoise / separate tracks
+          │
+          ▼
+Optional webcam / keystrokes / cursor / mouse effects
           │
           ▼
 Optional countdown
@@ -565,7 +501,7 @@ Optional countdown
         STOP
           │
           ▼
-Merge video/audio parts
+Merge recording parts
           │
           ▼
 Finalize output
@@ -574,96 +510,50 @@ Finalize output
       Save recording
 ```
 
----
-
-## Audio Architecture
-
-Audio sources are discovered through PulseAudio-compatible `pactl` commands.
-
-The recorder distinguishes between:
-
-```text
-Microphone Sources
-        │
-        └── Physical/input sources
-
-
-System Audio Sources
-        │
-        └── .monitor sources
-```
-
-When both are selected:
-
-```text
-Microphone ──────┐
-                 │
-                 ├── FFmpeg amix ──► Audio Output
-                 │
-System Audio ────┘
-```
-
-The audio recording process is independent from the video recording process.
-
-After recording:
-
-```text
-Video Parts ──────► Video Merge
-                         │
-                         ├──────► Final Video
-                         │
-Audio Parts ──────► Audio Merge
-                         │
-                         └──────► Final Audio
-```
-
-The final video and audio streams are then muxed without unnecessary re-encoding.
-
----
-
 ## Requirements
 
-Helwan Screen Recorder is designed for:
+HSR is designed for:
 
 ```text
 Linux + X11
 ```
 
-Required runtime components:
+Runtime dependencies used by the current package are:
 
-- GTK3
-- FFmpeg
-- PulseAudio-compatible `pactl`
-- X11
-- KMag
-- `slop`
-- Screenkey
+- FFmpeg.
+- GTK3.
+- libpulse.
+- libX11.
+- KMag.
+- `slop`.
+- Screenkey.
 
-For webcam overlay:
+For webcam overlay, FFmpeg must provide V4L2 support and a compatible webcam must be available under `/dev/video*`.
 
-- FFmpeg V4L2 support
-- A V4L2-compatible webcam under `/dev/video*`
+For the Arch Linux / Helwan Linux package, the dependencies are declared in `PKGBUILD`.
 
-On Arch Linux / Helwan Linux:
+Install the runtime dependencies on an Arch-based system with:
 
 ```bash
 sudo pacman -S ffmpeg gtk3 libpulse libx11 kmag slop screenkey
 ```
 
----
-
 ## Building From Source
 
-### Requirements
+### Build requirements
 
-For building:
+- Go 1.22 or newer.
+- GTK3 development libraries.
+- X11 development libraries.
+- FFmpeg.
+- PulseAudio development/runtime support.
+- A working CGO toolchain.
 
-- Go
-- GTK3 development libraries
-- X11 development libraries
-- FFmpeg
-- PulseAudio development/runtime support
-- `libx11`
+The Go module currently uses:
+
+```text
+github.com/gotk3/gotk3 v0.6.2
+```
 
 Clone the repository:
 
@@ -684,50 +574,60 @@ Run:
 ./hel-recorder
 ```
 
----
+## Testing
+
+The project includes unit tests for audio-filter construction and recovery logic.
+
+Run:
+
+```bash
+go test ./...
+```
+
+The Arch package build also runs the test suite during `makepkg`'s `check()` stage.
 
 ## Debug Mode
 
-For troubleshooting FFmpeg and recording behavior, enable:
+For troubleshooting FFmpeg and recording behavior:
 
 ```bash
 HSR_DEBUG=1 ./hel-recorder
 ```
 
-Debug mode prints information such as:
+Debug output can report information such as:
 
-- Detected hardware encoder.
-- FFmpeg command lines.
+- Hardware-encoder detection.
+- FFmpeg capability checks.
+- FFmpeg command construction/execution.
 - Input queue support.
-- FFmpeg runtime statistics.
-- Recording pipeline information.
-
-Example:
-
-```text
-[hsr] encoder detected: VAAPI ...
-[hsr] input -thread_queue_size supported: true
-```
-
-This is useful when diagnosing recording performance, encoder selection, or FFmpeg compatibility.
-
----
+- Recording pipeline events.
+- Recovery activity.
 
 ## Force CPU Encoding
 
-For testing or troubleshooting hardware acceleration, CPU encoding can be forced with:
+For testing or troubleshooting hardware acceleration:
 
 ```bash
 HSR_FORCE_CPU=1 ./hel-recorder
 ```
 
-This disables automatic VAAPI/NVENC selection and uses the CPU encoder.
+This bypasses automatic hardware encoder selection and uses the CPU encoder.
 
----
+## Audio Synchronization Testing
+
+For systems that need an audio synchronization adjustment:
+
+```bash
+HSR_AUDIO_OFFSET_MS=50 ./hel-recorder
+```
+
+Positive values delay audio; negative values move audio earlier.
+
+This is an advanced troubleshooting control and is normally unnecessary.
 
 ## Arch Linux Package
 
-The project includes a `PKGBUILD` for Arch-based systems.
+The repository includes a `PKGBUILD` for Arch-based systems.
 
 Build and install:
 
@@ -744,10 +644,11 @@ The package installs:
 Application icons are installed under:
 
 ```text
-/usr/share/icons/hicolor/
+/usr/share/icons/hicolor/128x128/apps/
+/usr/share/icons/hicolor/256x256/apps/
 ```
 
-The GTK3 stylesheet is installed under:
+The GTK3 stylesheet is installed as:
 
 ```text
 /usr/share/helwan-screen-recorder/style.css
@@ -759,52 +660,28 @@ The desktop entry is installed as:
 /usr/share/applications/helwan-screen-recorder.desktop
 ```
 
----
+Package metadata:
+
+```text
+pkgname = hsr
+pkgver  = 1.3.0
+pkgrel  = 2
+arch    = x86_64
+```
 
 ## Output Files
 
-Recordings are automatically generated with timestamped filenames such as:
+Recordings use timestamped filenames such as:
 
 ```text
-Recording_2026-11-17_09-30-15_123456789.mp4
+Recording_2026-11-27_09-30-15.mp4
 ```
 
-The default save location is:
+The default save directory is the user's `~/Videos` directory when it exists; otherwise the user's home directory is used.
 
-```text
-~/Videos
-```
+Temporary recording parts are removed after successful finalization.
 
-when that directory exists.
-
-Otherwise, the user's home directory is used.
-
-Temporary recording parts are stored in the selected recording directory and are removed after successful finalization.
-
----
-
-## Technology Stack
-
-| Component | Technology |
-|---|---|
-| Language | Go |
-| GUI | GTK3 |
-| Screen Capture | FFmpeg `x11grab` |
-| Audio Capture | FFmpeg `pulse` |
-| Audio Mixing | FFmpeg `amix` |
-| H.264 CPU | `libx264` |
-| H.264 GPU | `h264_vaapi` / `h264_nvenc` |
-| VP9 | `libvpx-vp9` |
-| Audio | AAC / Opus |
-| Webcam | V4L2 |
-| Webcam Overlay | FFmpeg `overlay` |
-| Screen Area / Window Selection | `slop` |
-| Magnifier | KMag |
-| Keystroke Display | Screenkey |
-| Global Shortcuts | X11 |
-| System Tray | GTK StatusIcon / AppIndicator |
-
----
+If a recording is interrupted unexpectedly, the unfinished parts can be detected by the recovery system on the next launch.
 
 ## Project Structure
 
@@ -812,8 +689,11 @@ Temporary recording parts are stored in the selected recording directory and are
 hel-recorder/
 ├── assets/
 │   └── icon.png
+├── audio_filters.go
+├── audio_filters_test.go
 ├── camera.go
 ├── config.go
+├── extras.go
 ├── features.go
 ├── formats.go
 ├── go.mod
@@ -821,8 +701,12 @@ hel-recorder/
 ├── hel-recorder.desktop
 ├── main.go
 ├── monitors.go
+├── mouse_effects.go
 ├── options.go
 ├── recorder.go
+├── recovery.go
+├── recovery_logic.go
+├── recovery_logic_test.go
 ├── style.css
 ├── tray.go
 ├── ui.go
@@ -833,57 +717,55 @@ hel-recorder/
 
 `main.go`
 
-Initializes GTK, the recorder manager, global shortcuts, system tray integration, and application shutdown handling.
+Initializes GTK, the recorder manager, global shortcuts, tray integration, screenshot handling, recovery handling, and application shutdown.
 
 `ui.go`
 
-Contains the GTK3 interface, recording controls, video settings, audio settings, Advanced settings, webcam options, dialogs, Help, and About.
+Contains the GTK3 interface, recording controls, video settings, audio settings, Advanced settings, webcam controls, screenshot control, Help, and About.
 
 `recorder.go`
 
-Contains the main recording engine, FFmpeg command construction, separate video/audio pipelines, Pause/Resume, output handling, hardware encoder usage, disk protection, automatic stop, and recording lifecycle.
+Contains the main recording lifecycle, FFmpeg process management, separate video/audio pipelines, Pause/Resume, recording parts, hardware encoder integration, automatic stop, and disk protection.
 
 `formats.go`
 
-Contains:
+Contains format selection, hardware-encoder probing, encoder settings, recording-container selection, recording-part merging, MP4 remuxing, GIF conversion, and finalization.
 
-- Supported output formats.
-- VAAPI detection.
-- NVENC detection.
-- CPU fallback.
-- FFmpeg input queue compatibility detection.
-- Encoder settings.
-- Video part merging.
-- MP4 remuxing.
-- GIF conversion.
-- Audio/video finalization.
+`audio_filters.go`
+
+Contains microphone/system-audio filters, volume handling, optional denoise, mixing, and separate-track generation.
 
 `options.go`
 
-Contains:
-
-- Quality settings.
-- Bitrate settings.
-- Auto-stop settings.
-- Disk-space protection.
+Contains quality, bitrate, automatic-stop, disk-space protection, and related recording options.
 
 `camera.go`
 
-Contains webcam detection, MJPEG capability detection, and webcam overlay positioning.
+Contains webcam detection, V4L2/MJPEG capability handling, and webcam overlay settings.
 
 `features.go`
 
-Contains optional recording features such as:
+Contains optional runtime features such as the floating recording OSD, countdown, Screenkey integration, and KMag integration.
 
-- Floating OSD.
-- Countdown.
-- KMag integration.
-- Screenkey integration.
-- Webcam-related functionality.
+`extras.go`
+
+Contains auxiliary features including screenshot handling and UI synchronization for optional recording effects.
+
+`mouse_effects.go`
+
+Contains the transparent X11 mouse-effects overlay and click animations.
+
+`recovery.go`
+
+Handles startup detection and user interaction for unfinished recordings.
+
+`recovery_logic.go`
+
+Contains the recovery logic for discovering, pairing, recovering, and deleting unfinished recording parts.
 
 `tray.go`
 
-Provides system-tray integration and recording-state controls.
+Provides system-tray integration.
 
 `monitors.go`
 
@@ -897,124 +779,68 @@ Provides global X11 keyboard shortcuts.
 
 Handles persistent recorder configuration.
 
----
-
 ## Design Goals
-
-Helwan Screen Recorder is intentionally built around a small number of principles.
 
 ### Simple
 
-The interface exposes important recording controls without overwhelming the user.
+Keep the important recording controls visible without turning HSR into a complicated production suite.
 
 ### Practical
 
-Features are focused on real recording workflows rather than adding complexity for its own sake.
+Prioritize features that are useful during real desktop-recording sessions.
 
 ### Lightweight
 
-The application is written in Go with GTK3 and delegates video/audio processing to FFmpeg.
+Use Go and GTK3 for the application while delegating media capture and processing to FFmpeg.
 
 ### Reliable
 
-The recorder validates important dependencies, recording parameters, hardware encoders, audio sources, and available disk space before and during recording.
+Validate important dependencies, capture parameters, hardware encoders, audio sources, and disk space instead of assuming they are available.
 
-### Low-Latency
-
-The recording pipeline is designed to minimize unnecessary synchronization between screen capture, audio processing, and encoding.
-
-### Transparent
-
-The application clearly reports recording state, errors, and the final output location.
+Preserve intermediate recording parts and provide recovery after unexpected interruption.
 
 ### Linux-Focused
 
-The current implementation is designed specifically around Linux technologies such as:
+Use native Linux technologies where they make sense:
 
-- X11
-- FFmpeg
-- PulseAudio-compatible `pactl`
-- V4L2
-- VAAPI
-- NVENC
-- GTK3
+- X11.
+- FFmpeg.
+- PulseAudio-compatible `pactl`.
+- V4L2.
+- VAAPI.
+- NVENC.
+- GTK3.
 
----
-
-## What Helwan Screen Recorder Is Not
+## What HSR Is Not
 
 Helwan Screen Recorder is not intended to reproduce every feature of large production-oriented recording suites.
 
-It focuses on the features that are useful for everyday desktop recording:
+Its focus is a clean, practical desktop-recording workflow:
 
-- Screen capture
-- Audio capture
-- Webcam overlay
-- Pause / Resume
-- Multiple formats
-- Hardware acceleration
-- Low-lag recording architecture
-- Global shortcuts
-- Automatic stopping
-- Disk protection
-- Practical recording controls
-
-The goal is to keep the application understandable while still providing the features that matter for real recording workflows.
-
----
-
-## Status
-
-Helwan Screen Recorder is an actively developed Linux desktop application.
-
-The current **1.2.0** release focuses on:
-
-- Reliable X11 screen recording.
-- Separate video and audio recording pipelines.
-- Reduced recording latency.
-- VAAPI hardware acceleration.
-- NVENC hardware acceleration.
-- CPU fallback encoding.
-- Runtime FFmpeg capability detection.
-- Microphone and system audio recording.
-- Webcam PiP overlay.
+- Screen capture.
+- Microphone and system audio.
+- Webcam PiP.
+- Pause / Resume.
 - Multiple output formats.
-- Segment-based Pause/Resume.
-- Floating recording OSD.
-- System-tray controls.
-- Global keyboard shortcuts.
-- Screenkey integration.
-- KMag integration.
-- Automatic recording limits.
-- Low-disk-space protection.
-- Quality and bitrate controls.
-- Crash-resilient intermediate recording parts.
-- Lightweight GTK3 interface.
+- Hardware acceleration.
+- Audio mixing and separate tracks.
+- Mouse effects.
+- Keystroke display.
+- Recording OSD.
+- Screenshots.
+- Global shortcuts.
+- Automatic stopping.
+- Disk-space protection.
+- Crash recovery.
 
-The goal is simple:
-
-> **Fast, practical, reliable, and understandable screen recording for Linux.**
-
----
+The goal is to keep the application understandable while covering the features that matter during everyday recording.
 
 ## License
 
 Helwan Screen Recorder is released under the **MIT License**.
 
-See `LICENSE` for the complete license text.
+## Project
 
----
+Helwan Screen Recorder is part of the **Helwan Linux** project.
 
-## Helwan Linux
-
-Helwan Screen Recorder is part of the Helwan Linux ecosystem.
-
-**Helwan Linux — Arch Power, Helwan Simplicity.**
-
-Project:
-
-https://github.com/helwan-linux/hel-recorder
-
-Helwan Linux:
-
-https://github.com/helwan-linux
+> **A practical recorder should be easy to use, reliable when recording matters, and fast enough to stay out of the way.**
